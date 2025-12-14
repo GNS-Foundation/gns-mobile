@@ -8,6 +8,7 @@ import { aliasClaimSchema, handleSchema } from '../lib/validation';
 import { verifyAliasClaim, isValidHandle } from '../lib/crypto';
 import * as db from '../lib/db';
 import { ApiResponse, GNS_CONSTANTS } from '../types';
+import stellarService from '../services/stellar_service';
 
 const router = Router();
 
@@ -206,12 +207,44 @@ router.put('/:handle', async (req: Request, res: Response) => {
     
     console.log(`Handle claimed: @${handle} → ${identity.substring(0, 16)}...`);
     
+    // ===========================================
+    // AUTOMATIC AIRDROP ON HANDLE CLAIM
+    // ===========================================
+    let airdropResult = null;
+    
+    if (stellarService.isConfigured()) {
+      console.log(`[Airdrop] Processing welcome airdrop for @${handle}...`);
+      
+      // Run airdrop in background (don't block response)
+      stellarService.airdropToNewUser(identity)
+        .then(result => {
+          if (result.success) {
+            console.log(`[Airdrop] ✅ @${handle} received welcome tokens!`);
+            console.log(`[Airdrop]    Stellar: ${result.stellarAddress}`);
+            console.log(`[Airdrop]    XLM tx: ${result.xlmTx}`);
+            console.log(`[Airdrop]    GNS tx: ${result.gnsTx}`);
+          } else {
+            console.error(`[Airdrop] ❌ Failed for @${handle}: ${result.error}`);
+          }
+        })
+        .catch(err => {
+          console.error(`[Airdrop] ❌ Error for @${handle}:`, err.message);
+        });
+      
+      airdropResult = { status: 'processing', message: 'Welcome tokens being sent!' };
+    } else {
+      console.warn(`[Airdrop] Skipped for @${handle} - distribution wallet not configured`);
+      airdropResult = { status: 'skipped', message: 'Airdrop not configured' };
+    }
+    // ===========================================
+    
     return res.status(201).json({
       success: true,
       data: {
         handle: alias.handle,
         pk_root: alias.pk_root,
         created_at: alias.created_at,
+        airdrop: airdropResult,
       },
       message: `@${handle} is now yours!`,
     } as ApiResponse);
@@ -279,6 +312,38 @@ router.post('/:handle/reserve', async (req: Request, res: Response) => {
     
   } catch (error) {
     console.error('POST /aliases/:handle/reserve error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    } as ApiResponse);
+  }
+});
+
+// ===========================================
+// GET /aliases/airdrop/status
+// Check airdrop service status
+// ===========================================
+router.get('/airdrop/status', async (req: Request, res: Response) => {
+  try {
+    const isConfigured = stellarService.isConfigured();
+    const distributionAddress = stellarService.getDistributionAddress();
+    const balances = await stellarService.getDistributionBalances();
+    
+    return res.json({
+      success: true,
+      data: {
+        enabled: isConfigured,
+        distribution_wallet: distributionAddress,
+        balances: balances,
+        amounts: {
+          xlm_per_user: '2',
+          gns_per_user: '200',
+        },
+      },
+    } as ApiResponse);
+    
+  } catch (error) {
+    console.error('GET /aliases/airdrop/status error:', error);
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
