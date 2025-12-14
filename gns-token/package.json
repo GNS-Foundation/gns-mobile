@@ -1,0 +1,22 @@
+{
+  "name": "gns-token",
+  "version": "1.0.0",
+  "description": "GNS Token Layer - Stellar-based token for the GNS Protocol",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "01:create-issuer": "npx tsx src/01-create-issuer.ts",
+    "02:issue-token": "npx tsx src/02-issue-token.ts",
+    "03:send-tokens": "npx tsx src/03-send-tokens.ts",
+    "04:validator-rewards": "npx tsx src/04-validator-rewards.ts"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^14.4.2",
+    "dotenv": "^16.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.26",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

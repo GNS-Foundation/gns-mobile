@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "@types/ws": "^8.18.1",
+    "stellar-sdk": "^13.3.0",
+    "ws": "^8.18.3"
+  }
+}

@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import Inter font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@layer base {
+  :root {
+    --gns-primary: #6366F1;
+    --gns-secondary: #10B981;
+    --gns-accent: #F59E0B;
+    --gns-error: #EF4444;
+    
+    --background: #FFFFFF;
+    --surface: #F8FAFC;
+    --border: #E2E8F0;
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #94A3B8;
+  }
+
+  .dark {
+    --background: #0F172A;
+    --surface: #1E293B;
+    --border: #334155;
+    --text-primary: #F8FAFC;
+    --text-secondary: #94A3B8;
+    --text-muted: #64748B;
+  }
+
+  body {
+    @apply bg-[var(--background)] text-[var(--text-primary)];
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  /* GNS Card Style */
+  .gns-card {
+    @apply bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6;
+    @apply transition-all duration-200;
+  }
+  
+  .gns-card:hover {
+    @apply shadow-lg;
+  }
+
+  /* GNS Button Styles */
+  .gns-button {
+    @apply px-6 py-3 rounded-xl font-semibold transition-all duration-200;
+    @apply focus:outline-none focus:ring-2 focus:ring-offset-2;
+  }
+
+  .gns-button-primary {
+    @apply gns-button bg-gns-primary text-white;
+    @apply hover:bg-gns-primary/90 focus:ring-gns-primary;
+  }
+
+  .gns-button-secondary {
+    @apply gns-button bg-gns-secondary text-white;
+    @apply hover:bg-gns-secondary/90 focus:ring-gns-secondary;
+  }
+
+  .gns-button-outline {
+    @apply gns-button border-2 border-gns-primary text-gns-primary;
+    @apply hover:bg-gns-primary hover:text-white;
+  }
+
+  /* Trust Badge */
+  .trust-badge {
+    @apply inline-flex items-center gap-1 px-2 py-1 rounded-full text-sm font-medium;
+  }
+
+  .trust-badge-high {
+    @apply trust-badge bg-gns-secondary/20 text-gns-secondary;
+  }
+
+  .trust-badge-medium {
+    @apply trust-badge bg-gns-accent/20 text-gns-accent;
+  }
+
+  .trust-badge-low {
+    @apply trust-badge bg-gns-error/20 text-gns-error;
+  }
+
+  /* Stat Box */
+  .stat-box {
+    @apply flex flex-col items-center p-4 rounded-xl bg-[var(--surface)];
+    @apply border border-[var(--border)];
+  }
+
+  /* Search Input */
+  .gns-search {
+    @apply w-full px-4 py-3 rounded-xl;
+    @apply bg-[var(--surface)] border border-[var(--border)];
+    @apply text-[var(--text-primary)] placeholder-[var(--text-muted)];
+    @apply focus:outline-none focus:ring-2 focus:ring-gns-primary focus:border-transparent;
+    @apply transition-all duration-200;
+  }
+}
+
+@layer utilities {
+  /* Gradient text */
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    @apply bg-gradient-to-r from-gns-primary to-gns-secondary;
+  }
+
+  /* Glass effect */
+  .glass {
+    @apply bg-white/70 dark:bg-slate-900/70 backdrop-blur-lg;
+  }
+
+  /* Hide scrollbar */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Custom animations */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
