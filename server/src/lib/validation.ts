@@ -76,7 +76,7 @@ export const gnsRecordSchema = z.object({
   breadcrumb_count: z.number().int().nonnegative(),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
-});
+}).passthrough();
 
 // ===========================================
 // Signed Record Request
