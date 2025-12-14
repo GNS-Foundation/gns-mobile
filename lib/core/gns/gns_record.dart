@@ -1,13 +1,53 @@
 // GNS Record - Phase 3A Update
 //
 // Identity manifest structure (replaces DNS records).
-// FIXED: Consistent timestamp between dataToSign and build.
+// FIXED: Canonical JSON encoding for signing AND sending.
 //
 // Location: lib/core/gns/gns_record.dart
 
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
+
+// =============================================================================
+// CANONICAL JSON UTILITIES (shared between GnsRecord and GnsRecordBuilder)
+// =============================================================================
+
+/// Normalize number to match JavaScript JSON.stringify behavior
+/// Converts 70.0 to 70 (int) but keeps 70.5 as 70.5 (double)
+dynamic canonicalNumber(num value) {
+  if (value is double && value == value.truncateToDouble()) {
+    return value.toInt();
+  }
+  return value;
+}
+
+/// Recursively sort map keys and normalize values for canonical JSON
+dynamic canonicalValue(dynamic value) {
+  if (value is Map<String, dynamic>) {
+    final sorted = <String, dynamic>{};
+    final keys = value.keys.toList()..sort();
+    for (final key in keys) {
+      sorted[key] = canonicalValue(value[key]);
+    }
+    return sorted;
+  } else if (value is List) {
+    return value.map(canonicalValue).toList();
+  } else if (value is double && value == value.truncateToDouble()) {
+    return value.toInt();
+  }
+  return value;
+}
+
+/// Encode to canonical JSON (sorted keys, normalized numbers)
+/// This MUST match the server's canonicalJson() function
+String canonicalJsonEncode(Map<String, dynamic> data) {
+  return jsonEncode(canonicalValue(data));
+}
+
+// =============================================================================
+// GNS RECORD
+// =============================================================================
 
 class GnsRecord {
   final String identity;
@@ -38,22 +78,26 @@ class GnsRecord {
     this.version = 1,
   });
 
-  String get dataToSign {
-    final data = {
-      'version': version,
-      'identity': identity,
-      'handle': handle,
-      'encryption_key': encryptionKey, 
-      'modules': modules.map((m) => m.toJson()).toList(),
-      'endpoints': endpoints.map((e) => e.toJson()).toList(),
-      'epoch_roots': epochRoots,
-      'trust_score': trustScore,
+  /// Get the canonical data structure (what was signed)
+  /// Keys are sorted alphabetically, numbers normalized
+  Map<String, dynamic> get canonicalData {
+    return canonicalValue({
       'breadcrumb_count': breadcrumbCount,
       'created_at': createdAt.toUtc().toIso8601String(),
+      'encryption_key': encryptionKey,
+      'endpoints': endpoints.map((e) => e.toJson()).toList(),
+      'epoch_roots': epochRoots,
+      'handle': handle,
+      'identity': identity,
+      'modules': modules.map((m) => m.toJson()).toList(),
+      'trust_score': trustScore,
       'updated_at': updatedAt.toUtc().toIso8601String(),
-    };
-    return jsonEncode(data);
+      'version': version,
+    }) as Map<String, dynamic>;
   }
+
+  /// Data to sign (canonical JSON string)
+  String get dataToSign => canonicalJsonEncode(canonicalData);
 
   String computeHash() {
     final digest = SHA256Digest();
@@ -64,20 +108,17 @@ class GnsRecord {
   String get gnsId => 'gns_${identity.substring(0, 16)}';
   String get displayName => handle != null ? '@$handle' : gnsId;
 
-  Map<String, dynamic> toJson() => {
-    'version': version,
-    'identity': identity,
-    'handle': handle,
-    'encryption_key': encryptionKey,  
-    'modules': modules.map((m) => m.toJson()).toList(),
-    'endpoints': endpoints.map((e) => e.toJson()).toList(),
-    'epoch_roots': epochRoots,
-    'trust_score': trustScore,
-    'breadcrumb_count': breadcrumbCount,
-    'created_at': createdAt.toUtc().toIso8601String(),
-    'updated_at': updatedAt.toUtc().toIso8601String(),
-    'signature': signature,
-  };
+  /// Convert to JSON for API - includes signature separately
+  /// The record_json part uses canonical format (sorted keys, normalized numbers)
+  Map<String, dynamic> toJson() {
+    // Return canonical data + signature
+    final data = canonicalData;
+    data['signature'] = signature;
+    return data;
+  }
+
+  /// Get record_json without signature (for API)
+  Map<String, dynamic> toRecordJson() => canonicalData;
 
   factory GnsRecord.fromJson(Map<String, dynamic> json) {
     return GnsRecord(
@@ -96,6 +137,10 @@ class GnsRecord {
     );
   }
 }
+
+// =============================================================================
+// GNS MODULE
+// =============================================================================
 
 class GnsModule {
   final String id;
@@ -148,6 +193,10 @@ abstract class GnsModuleSchemas {
   static const api = 'gns.module.api/v1';
 }
 
+// =============================================================================
+// GNS ENDPOINT
+// =============================================================================
+
 class GnsEndpoint {
   final String type;
   final String protocol;
@@ -186,22 +235,26 @@ class GnsEndpoint {
   }
 }
 
+// =============================================================================
+// GNS RECORD BUILDER
+// =============================================================================
+
 class GnsRecordBuilder {
   final String identity;
   String? handle;
-  String? encryptionKey; // <-- PATCH 2: ADDED FIELD
+  String? encryptionKey;
   List<GnsModule> modules = [];
   List<GnsEndpoint> endpoints = [];
   List<String> epochRoots = [];
   double trustScore = 0;
   int breadcrumbCount = 0;
   DateTime? createdAt;
-  DateTime? _updatedAt;  // FIXED: Store the timestamp
+  DateTime? _updatedAt;
 
   GnsRecordBuilder(this.identity);
 
   GnsRecordBuilder withHandle(String h) { handle = h; return this; }
-  GnsRecordBuilder withEncryptionKey(String key) { encryptionKey = key; return this; } // 🟢 PATCH 1: ADD THE MISSING SETTER METHOD
+  GnsRecordBuilder withEncryptionKey(String key) { encryptionKey = key; return this; }
   GnsRecordBuilder addModule(GnsModule m) { modules.add(m); return this; }
   GnsRecordBuilder addEndpoint(GnsEndpoint e) { endpoints.add(e); return this; }
   GnsRecordBuilder addEpochRoot(String root) { epochRoots.add(root); return this; }
@@ -225,53 +278,29 @@ class GnsRecordBuilder {
       trustScore: trustScore,
       breadcrumbCount: breadcrumbCount,
       createdAt: createdAt ?? updatedAt,
-      updatedAt: updatedAt,  // FIXED: Use same timestamp
+      updatedAt: updatedAt,
       signature: signature,
     );
   }
 
-  String get dataToSign {
-    final data = {
+  /// Get canonical data structure (matches GnsRecord.canonicalData)
+  Map<String, dynamic> get canonicalData {
+    return canonicalValue({
       'breadcrumb_count': breadcrumbCount,
       'created_at': (createdAt ?? updatedAt).toUtc().toIso8601String(),
-      'endpoints': endpoints.map((e) => _sortedMap(e.toJson())).toList(),
-      'encryption_key': encryptionKey, 
+      'encryption_key': encryptionKey,
+      'endpoints': endpoints.map((e) => e.toJson()).toList(),
       'epoch_roots': epochRoots,
       'handle': handle,
       'identity': identity,
-      'modules': modules.map((m) => _sortedMap(m.toJson())).toList(),
-      'trust_score': _normalizeNumber(trustScore),  // 70.0 → 70
+      'modules': modules.map((m) => m.toJson()).toList(),
+      'trust_score': trustScore,
       'updated_at': updatedAt.toUtc().toIso8601String(),
       'version': 1,
-    };
-    return jsonEncode(data);
+    }) as Map<String, dynamic>;
   }
-  
-  /// Normalize number to match JavaScript JSON.stringify behavior
-  /// Converts 70.0 to 70 (int) but keeps 70.5 as 70.5 (double)
-  static dynamic _normalizeNumber(num value) {
-    if (value is double && value == value.truncateToDouble()) {
-      return value.toInt();
-    }
-    return value;
-  }
-  
-  /// Sort map keys alphabetically for canonical JSON
-  static Map<String, dynamic> _sortedMap(Map<String, dynamic> map) {
-    final sorted = <String, dynamic>{};
-    final keys = map.keys.toList()..sort();
-    for (final key in keys) {
-      final value = map[key];
-      if (value is Map<String, dynamic>) {
-        sorted[key] = _sortedMap(value);
-      } else if (value is List) {
-        sorted[key] = value.map((v) => v is Map<String, dynamic> ? _sortedMap(v) : v).toList();
-      } else if (value is double && value == value.truncateToDouble()) {
-        sorted[key] = value.toInt();  // 70.0 → 70 to match JavaScript
-      } else {
-        sorted[key] = value;
-      }
-    }
-    return sorted;
-  }
+
+  /// Data to sign (canonical JSON string)
+  /// Uses shared canonicalJsonEncode for consistency
+  String get dataToSign => canonicalJsonEncode(canonicalData);
 }

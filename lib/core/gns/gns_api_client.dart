@@ -79,10 +79,16 @@ class GnsApiClient {
     required Map<String, dynamic> record,
   }) async {
     try {
+      // Extract signature and remove from record_json
+      final signature = record['signature'];
+      final recordWithoutSignature = Map<String, dynamic>.from(record);
+      recordWithoutSignature.remove('signature');
+      
       final response = await _dio.put(
         '/records/$publicKey',
         data: {
-          'record_json': record,  // Wrap it!
+          'record_json': recordWithoutSignature,
+          'signature': signature,
         },
       );
       return response.data as Map<String, dynamic>;
