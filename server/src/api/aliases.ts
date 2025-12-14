@@ -13,6 +13,39 @@ import stellarService from '../services/stellar_service';
 const router = Router();
 
 // ===========================================
+// GET /aliases/airdrop/status
+// Check airdrop service status
+// MUST BE BEFORE /:handle route!
+// ===========================================
+router.get('/airdrop/status', async (req: Request, res: Response) => {
+  try {
+    const isConfigured = stellarService.isConfigured();
+    const distributionAddress = stellarService.getDistributionAddress();
+    const balances = await stellarService.getDistributionBalances();
+    
+    return res.json({
+      success: true,
+      data: {
+        enabled: isConfigured,
+        distribution_wallet: distributionAddress,
+        balances: balances,
+        amounts: {
+          xlm_per_user: '2',
+          gns_per_user: '200',
+        },
+      },
+    } as ApiResponse);
+    
+  } catch (error) {
+    console.error('GET /aliases/airdrop/status error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    } as ApiResponse);
+  }
+});
+
+// ===========================================
 // GET /aliases/:handle
 // Resolve @handle → PK_root
 // ===========================================
@@ -312,38 +345,6 @@ router.post('/:handle/reserve', async (req: Request, res: Response) => {
     
   } catch (error) {
     console.error('POST /aliases/:handle/reserve error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-// ===========================================
-// GET /aliases/airdrop/status
-// Check airdrop service status
-// ===========================================
-router.get('/airdrop/status', async (req: Request, res: Response) => {
-  try {
-    const isConfigured = stellarService.isConfigured();
-    const distributionAddress = stellarService.getDistributionAddress();
-    const balances = await stellarService.getDistributionBalances();
-    
-    return res.json({
-      success: true,
-      data: {
-        enabled: isConfigured,
-        distribution_wallet: distributionAddress,
-        balances: balances,
-        amounts: {
-          xlm_per_user: '2',
-          gns_per_user: '200',
-        },
-      },
-    } as ApiResponse);
-    
-  } catch (error) {
-    console.error('GET /aliases/airdrop/status error:', error);
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
