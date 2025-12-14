@@ -8,8 +8,8 @@
 export interface GnsRecord {
   version: number;
   identity: string;        
-  handle?: string;         
-  encryption_key?: string;  
+  handle?: string | null;         
+  encryption_key?: string | null;  
   modules: GnsModule[];
   endpoints: GnsEndpoint[];
   epoch_roots: string[];
@@ -122,8 +122,8 @@ export interface DbRecord {
   record_json: GnsRecord;
   signature: string;
   version: number;
-  handle?: string;
-  encryption_key?: string; 
+  handle?: string | null;
+  encryption_key?: string | null; 
   trust_score: number;
   breadcrumb_count: number;
   created_at: string;
