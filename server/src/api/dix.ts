@@ -14,7 +14,10 @@
 // ===========================================
 
 import { Router, Request, Response } from 'express';
-import { supabase } from '../lib/db';
+import { getSupabase } from '../lib/db';
+
+// Get supabase client
+const supabase = getSupabase();
 
 const router = Router();
 
@@ -605,7 +608,7 @@ router.get('/stats', async (req: Request, res: Response) => {
       .eq('status', 'published')
       .gte('created_at', today.toISOString());
 
-    const uniqueAuthors = new Set(activeUsers?.map(p => p.author_pk) || []);
+    const uniqueAuthors = new Set(activeUsers?.map((p: { author_pk: string }) => p.author_pk) || []);
 
     return res.json({
       success: true,
