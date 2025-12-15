@@ -21,6 +21,7 @@ import identitiesRouter from './api/identities';
 import paymentsRouter from './api/payments';
 import geoauthRouter from './api/geoauth';
 import webRouter from './api/web'; 
+import dixRouter from './api/dix';
 
 // Services
 import echoBot from './services/echo_bot';
@@ -146,6 +147,7 @@ app.use('/auth', geoauthRouter);
 app.use('/web', webRouter);
 app.use('/search', webRouter);  // For /search endpoint
 app.use('/stats', webRouter);   // For /stats endpoint
+app.use('/web/dix', dixRouter);
 
 // ===========================================
 // Auth Challenge Endpoint
