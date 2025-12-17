@@ -166,7 +166,12 @@ class StellarService {
       return { success: true, txHash: result.hash };
     } catch (e: any) {
       console.error('[Stellar] XLM airdrop failed:', e.message);
-      console.error('[Stellar] Error details:', JSON.stringify(e.response?.data?.extras?.result_codes, null, 2));
+      if (e.response?.data) {
+        console.error('[Stellar] Error details:', JSON.stringify(e.response.data, null, 2));
+      }
+      if (e.response?.data?.extras?.result_codes) {
+        console.error('[Stellar] Result codes:', e.response.data.extras.result_codes);
+      }
       return { success: false, error: e.message };
     }
   }
