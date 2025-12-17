@@ -1,7 +1,7 @@
 name: gns_browser
 description: GNS - Identity through Presence. Replace DNS with cryptographic proof-of-trajectory.
 publish_to: 'none'
-version: 0.1.0+11
+version: 0.1.0+18
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
@@ -32,6 +32,7 @@ dependencies:
   flutter_chat_ui: ^1.6.15
   flutter_chat_types: ^3.6.2
   stellar_flutter_sdk: ^2.1.8
+  supabase_flutter: ^2.3.0
   
   # Phase 4b - Map Visualization
   flutter_map: ^8.2.2

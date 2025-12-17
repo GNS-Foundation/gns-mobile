@@ -1,6 +1,7 @@
-/// Settings Tab
+/// Settings Tab - Updated for Meta-Identity Architecture
 /// 
-/// App settings including facets, payments, theme, identity management.
+/// Shows me@ as the primary editable facet with user's profile photo.
+/// Displays broadcast facets (DIX) with special badges.
 /// 
 /// Location: lib/ui/settings/settings_tab.dart
 
@@ -11,6 +12,7 @@ import 'package:flutter/services.dart';
 import '../../core/gns/identity_wallet.dart';
 import '../../core/profile/profile_facet.dart';
 import '../../core/profile/facet_storage.dart';
+import '../../core/profile/profile_module.dart';
 import '../../core/financial/payment_service.dart';
 import '../../core/theme/theme_service.dart';
 import '../screens/facet_list_screen.dart';
@@ -18,6 +20,7 @@ import '../screens/facet_editor_screen.dart';
 import '../screens/debug_screen.dart';
 import '../financial/financial_settings_screen.dart';
 import '../financial/transactions_screen.dart';
+import '../messages/broadcast_screen.dart';
 
 // ==================== SETTINGS TAB ====================
 
@@ -33,18 +36,40 @@ class SettingsTab extends StatefulWidget {
 
 class _SettingsTabState extends State<SettingsTab> {
   List<ProfileFacet> _facets = [];
+  ProfileFacet? _defaultFacet;
   final _facetStorage = FacetStorage();
   final _themeService = ThemeService();
   
-  // NEW: Payment service for displaying endpoint count
   int _paymentEndpointCount = 0;
+  String? _handle;
+
+  /// Get the user's handle
+  String get _userHandle => _handle ?? 'you';
 
   @override
   void initState() {
     super.initState();
     _themeService.addListener(_onThemeChanged);
+    _loadHandle();
     _loadFacets();
-    _loadPaymentInfo();  // NEW
+    _loadPaymentInfo();
+  }
+
+  Future<void> _loadHandle() async {
+    final handle = await widget.wallet.getCurrentHandle();
+    if (handle == null) {
+      // Fall back to getIdentityInfo for reserved handle
+      final info = await widget.wallet.getIdentityInfo();
+      if (mounted) {
+        setState(() {
+          _handle = info.claimedHandle ?? info.reservedHandle;
+        });
+      }
+    } else if (mounted) {
+      setState(() {
+        _handle = handle;
+      });
+    }
   }
 
   @override
@@ -60,16 +85,25 @@ class _SettingsTabState extends State<SettingsTab> {
   Future<void> _loadFacets() async {
     try {
       await _facetStorage.initialize();
+      
+      // Migrate profile data to me@ facet if needed
+      final profileData = widget.wallet.getProfile();
+      await _facetStorage.migrateFromProfileData(profileData);
+      
       final facets = await _facetStorage.getAllFacets();
+      final defaultFacet = await _facetStorage.getDefaultFacet();
+      
       if (mounted) {
-        setState(() => _facets = facets);
+        setState(() {
+          _facets = facets;
+          _defaultFacet = defaultFacet;
+        });
       }
     } catch (e) {
       debugPrint('Error loading facets: $e');
     }
   }
 
-  // NEW: Load payment endpoint count
   Future<void> _loadPaymentInfo() async {
     try {
       final paymentService = PaymentService.instance(widget.wallet);
@@ -98,16 +132,14 @@ class _SettingsTabState extends State<SettingsTab> {
           _buildFacetsSection(),
           const SizedBox(height: 24),
           
-          // ============ FINANCIAL SETTINGS ============
           _buildFinancialSection(),
           const SizedBox(height: 24),
           
           _buildThemeSection(),
           const SizedBox(height: 24),
 
-          // 👇 ADD THIS DEBUG BUTTON HERE:
           Card(
-            color: Colors.deepPurple.withOpacity(0.1),
+            color: Colors.deepPurple.withValues(alpha: 0.1),
             child: ListTile(
               leading: const Icon(Icons.bug_report, color: Colors.deepPurple),
               title: const Text('Developer Tools'),
@@ -122,7 +154,6 @@ class _SettingsTabState extends State<SettingsTab> {
             ),
           ),
           const SizedBox(height: 16),
-          // 👆 END OF NEW CODE
 
           Card(
             child: Column(
@@ -161,18 +192,34 @@ class _SettingsTabState extends State<SettingsTab> {
   }
 
   Widget _buildFacetsSection() {
+    // Separate default, custom, and broadcast facets
+    final defaultFacet = _defaultFacet;
+    final customFacets = _facets.where((f) => f.isCustom).toList();
+    final broadcastFacets = _facets.where((f) => f.isBroadcast).toList();
+    
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Row(
                   children: [
-                    const Text('🎭', style: TextStyle(fontSize: 24)),
+                    // Show user's avatar if available
+                    if (defaultFacet?.avatarUrl != null)
+                      CircleAvatar(
+                        radius: 16,
+                        backgroundImage: _getAvatarImage(defaultFacet!.avatarUrl),
+                        child: _getAvatarImage(defaultFacet.avatarUrl) == null
+                            ? const Text('🎭', style: TextStyle(fontSize: 16))
+                            : null,
+                      )
+                    else
+                      const Text('🎭', style: TextStyle(fontSize: 24)),
                     const SizedBox(width: 12),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -202,10 +249,24 @@ class _SettingsTabState extends State<SettingsTab> {
               ],
             ),
             const SizedBox(height: 16),
-            if (_facets.isEmpty)
-              _buildEmptyFacetsState()
-            else
-              ..._facets.take(3).map((facet) => _buildFacetTile(facet)),
+            
+            // Default "me@" facet - always first and prominent
+            if (defaultFacet != null)
+              _buildDefaultFacetTile(defaultFacet),
+            
+            // Broadcast facets (DIX, etc.) - with special styling
+            if (broadcastFacets.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              ...broadcastFacets.map((facet) => _buildBroadcastFacetTile(facet)),
+            ],
+            
+            // Custom facets
+            if (customFacets.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              ...customFacets.take(2).map((facet) => _buildFacetTile(facet)),
+            ],
+            
+            // Show more link
             if (_facets.length > 3)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -231,38 +292,172 @@ class _SettingsTabState extends State<SettingsTab> {
     );
   }
 
-  Widget _buildEmptyFacetsState() {
+  /// Default "me@" facet - primary personal facet
+  Widget _buildDefaultFacetTile(ProfileFacet facet) {
+    final avatarImage = _getAvatarImage(facet.avatarUrl);
+    final handle = _userHandle;
+    
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceLight(context),
-              borderRadius: BorderRadius.circular(24),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.primary.withValues(alpha: 0.1),
+            AppTheme.primary.withValues(alpha: 0.05),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        leading: CircleAvatar(
+          radius: 26,
+          backgroundColor: AppTheme.primary.withValues(alpha: 0.2),
+          backgroundImage: avatarImage,
+          child: avatarImage == null 
+              ? Text(facet.emoji, style: const TextStyle(fontSize: 24))
+              : null,
+        ),
+        title: Row(
+          children: [
+            Text(
+              '#${facet.id}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
-            child: const Center(child: Text('👤', style: TextStyle(fontSize: 24))),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Default Profile', style: TextStyle(fontWeight: FontWeight.w500)),
-                Text(
-                  'Tap MANAGE to create facets',
-                  style: TextStyle(color: AppTheme.textSecondary(context), fontSize: 12),
-                ),
-              ],
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppTheme.primary,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'DEFAULT',
+                style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              facet.displayName ?? 'Your personal facet',
+              style: TextStyle(color: AppTheme.textSecondary(context), fontSize: 13),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '${facet.id}@$handle',
+              style: TextStyle(
+                color: AppTheme.textMuted(context), 
+                fontSize: 11,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+        ),
+        trailing: Icon(Icons.chevron_right, color: AppTheme.primary.withValues(alpha: 0.7)),
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => FacetEditorScreen(existingFacet: facet),
+            ),
+          );
+          _loadFacets();
+        },
       ),
     );
   }
 
+  /// Broadcast facet tile (DIX-style) with special styling
+  Widget _buildBroadcastFacetTile(ProfileFacet facet) {
+    final avatarImage = _getAvatarImage(facet.avatarUrl);
+    final handle = _userHandle;
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFF8B5CF6).withValues(alpha: 0.1),
+            const Color(0xFFEC4899).withValues(alpha: 0.05),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF8B5CF6).withValues(alpha: 0.3)),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        leading: CircleAvatar(
+          radius: 24,
+          backgroundColor: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
+          backgroundImage: avatarImage,
+          child: avatarImage == null 
+              ? Text(facet.emoji, style: const TextStyle(fontSize: 22))
+              : null,
+        ),
+        title: Row(
+          children: [
+            Text(
+              '#${facet.id}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
+                ),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.campaign, size: 10, color: Colors.white),
+                  SizedBox(width: 3),
+                  Text(
+                    'BROADCAST',
+                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        subtitle: Text(
+          '${facet.id}@$handle',
+          style: TextStyle(
+            color: AppTheme.textMuted(context), 
+            fontSize: 11,
+            fontFamily: 'monospace',
+          ),
+        ),
+        trailing: Icon(Icons.chevron_right, color: const Color(0xFF8B5CF6).withValues(alpha: 0.7)),
+        onTap: () async {
+          // Open BroadcastScreen for DIX facets
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BroadcastScreen(
+                facet: facet,
+                wallet: widget.wallet,
+              ),
+            ),
+          );
+          _loadFacets();
+        },
+      ),
+    );
+  }
+
+  /// Regular custom facet tile
   Widget _buildFacetTile(ProfileFacet facet) {
     final avatarImage = _getAvatarImage(facet.avatarUrl);
     
@@ -276,30 +471,15 @@ class _SettingsTabState extends State<SettingsTab> {
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         leading: CircleAvatar(
           radius: 22,
-          backgroundColor: _getFacetColor(facet.id).withOpacity(0.2),
+          backgroundColor: _getFacetColor(facet.id).withValues(alpha: 0.2),
           backgroundImage: avatarImage,
           child: avatarImage == null 
               ? Text(facet.emoji, style: const TextStyle(fontSize: 20))
               : null,
         ),
-        title: Row(
-          children: [
-            Text(facet.label, style: const TextStyle(fontWeight: FontWeight.w500)),
-            if (facet.isDefault) ...[
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppTheme.secondary,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'DEFAULT',
-                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
-                ),
-              ),
-            ],
-          ],
+        title: Text(
+          '#${facet.id}',
+          style: const TextStyle(fontWeight: FontWeight.w500),
         ),
         subtitle: Text(
           facet.displayName ?? facet.label,
@@ -340,12 +520,14 @@ class _SettingsTabState extends State<SettingsTab> {
 
   Color _getFacetColor(String id) {
     switch (id) {
-      case 'work': return AppTheme.primary;
+      case 'me': return AppTheme.primary;
+      case 'work': return const Color(0xFF3B82F6);
       case 'friends': return const Color(0xFFF97316);
       case 'family': return const Color(0xFFEC4899);
       case 'travel': return AppTheme.secondary;
       case 'creative': return AppTheme.accent;
       case 'gaming': return AppTheme.error;
+      case 'dix': return const Color(0xFF8B5CF6);
       default: return AppTheme.textMuted(context);
     }
   }
@@ -366,7 +548,7 @@ class _SettingsTabState extends State<SettingsTab> {
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: AppTheme.primary.withOpacity(0.1),
+                        color: AppTheme.primary.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Icon(
@@ -395,7 +577,6 @@ class _SettingsTabState extends State<SettingsTab> {
             ),
             const SizedBox(height: 16),
             
-            // Payment endpoints tile
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Container(
@@ -429,13 +610,12 @@ class _SettingsTabState extends State<SettingsTab> {
                   context,
                   MaterialPageRoute(builder: (_) => const FinancialSettingsScreen()),
                 );
-                _loadPaymentInfo();  // Reload after returning
+                _loadPaymentInfo();
               },
             ),
             
             const Divider(height: 24),
             
-            // Limits tile
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Container(
@@ -467,7 +647,6 @@ class _SettingsTabState extends State<SettingsTab> {
             
             const Divider(height: 24),
             
-            // Transaction History tile
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Container(
@@ -535,7 +714,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       decoration: BoxDecoration(
                         color: !isDark 
-                            ? AppTheme.primary.withOpacity(0.15)
+                            ? AppTheme.primary.withValues(alpha: 0.15)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
@@ -571,7 +750,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       decoration: BoxDecoration(
                         color: isDark 
-                            ? AppTheme.primary.withOpacity(0.15)
+                            ? AppTheme.primary.withValues(alpha: 0.15)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
@@ -623,7 +802,7 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
           const SizedBox(height: 4),
           Text(
-            'v0.4.1 • Light/Dark Mode',
+            'v0.5.0 • Meta-Identity Architecture',
             style: TextStyle(color: AppTheme.textMuted(context), fontSize: 12),
           ),
         ],

@@ -6,7 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/gns/identity_wallet.dart';
-import '../../services/stellar_service.dart';
+import '../financial/stellar_service.dart';
 
 class GnsTokenScreen extends StatefulWidget {
   const GnsTokenScreen({super.key});

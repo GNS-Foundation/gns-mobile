@@ -1,7 +1,12 @@
-/// Facet Storage - Phase 4c
+/// Facet Storage - Phase 4c + Meta-Identity Architecture
 /// 
 /// Persists profile facets to local SQLite database.
-/// Integrates with existing profile infrastructure.
+/// 
+/// Key features:
+/// - Auto-creates me@ facet on initialization
+/// - Migrates existing 'default' facet to 'me'
+/// - Supports FacetType (default, custom, broadcast)
+/// - Cannot delete default me@ facet
 /// 
 /// Location: lib/core/profile/facet_storage.dart
 
@@ -29,11 +34,16 @@ class FacetStorage {
 
     _database = await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,  // Bumped for facet_type column
       onCreate: _createTables,
+      onUpgrade: _upgradeTables,
     );
 
     _initialized = true;
+    
+    // Ensure default "me" facet exists
+    await _ensureDefaultFacet();
+    
     debugPrint('Facet storage initialized: $dbPath');
   }
 
@@ -47,6 +57,7 @@ class FacetStorage {
         avatar_url TEXT,
         bio TEXT,
         links TEXT,
+        facet_type TEXT NOT NULL DEFAULT 'custom',
         is_default INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -60,23 +71,125 @@ class FacetStorage {
       )
     ''');
 
-    // Create default facet
+    // Create default "me" facet
     final now = DateTime.now().toIso8601String();
     await db.insert('facets', {
-      'id': 'default',
-      'label': 'Default',
+      'id': 'me',
+      'label': 'Me',
       'emoji': '👤',
+      'facet_type': 'defaultPersonal',
       'is_default': 1,
       'links': '[]',
       'created_at': now,
       'updated_at': now,
     });
 
-    debugPrint('Facet tables created with default facet');
+    debugPrint('Facet tables created with default "me" facet');
+  }
+
+  Future<void> _upgradeTables(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Add facet_type column if upgrading from v1
+      try {
+        await db.execute('ALTER TABLE facets ADD COLUMN facet_type TEXT DEFAULT "custom"');
+        debugPrint('Added facet_type column');
+      } catch (e) {
+        debugPrint('Column facet_type might already exist: $e');
+      }
+      
+      // Migrate 'default' facet to 'me' with correct type
+      final existing = await db.query('facets', where: 'id = ?', whereArgs: ['default']);
+      if (existing.isNotEmpty) {
+        final row = existing.first;
+        
+        // Insert new 'me' facet with migrated data
+        await db.insert('facets', {
+          'id': 'me',
+          'label': 'Me',
+          'emoji': row['emoji'] ?? '👤',
+          'display_name': row['display_name'],
+          'avatar_url': row['avatar_url'],
+          'bio': row['bio'],
+          'links': row['links'] ?? '[]',
+          'facet_type': 'defaultPersonal',
+          'is_default': 1,
+          'created_at': row['created_at'] ?? DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        
+        // Delete old 'default' facet
+        await db.delete('facets', where: 'id = ?', whereArgs: ['default']);
+        
+        debugPrint('Migrated "default" facet to "me"');
+      } else {
+        // No 'default' facet, just update any existing default
+        await db.execute('''
+          UPDATE facets 
+          SET facet_type = 'defaultPersonal'
+          WHERE is_default = 1
+        ''');
+      }
+      
+      debugPrint('Upgraded facets table to version 2');
+    }
   }
 
   Future<void> _ensureInitialized() async {
     if (!_initialized) await initialize();
+  }
+
+  /// Ensure the default "me" facet exists
+  Future<void> _ensureDefaultFacet() async {
+    // Check for 'me' facet
+    final meResults = await _database!.query(
+      'facets',
+      where: 'id = ?',
+      whereArgs: ['me'],
+    );
+    
+    if (meResults.isEmpty) {
+      // Check for old 'default' facet to migrate
+      final defaultResults = await _database!.query(
+        'facets',
+        where: 'id = ?',
+        whereArgs: ['default'],
+      );
+      
+      if (defaultResults.isNotEmpty) {
+        // Migrate 'default' to 'me'
+        final row = defaultResults.first;
+        await _database!.insert('facets', {
+          'id': 'me',
+          'label': 'Me',
+          'emoji': row['emoji'] ?? '👤',
+          'display_name': row['display_name'],
+          'avatar_url': row['avatar_url'],
+          'bio': row['bio'],
+          'links': row['links'] ?? '[]',
+          'facet_type': 'defaultPersonal',
+          'is_default': 1,
+          'created_at': row['created_at'] ?? DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        
+        await _database!.delete('facets', where: 'id = ?', whereArgs: ['default']);
+        debugPrint('Migrated "default" facet to "me"');
+      } else {
+        // Create new 'me' facet
+        final now = DateTime.now().toIso8601String();
+        await _database!.insert('facets', {
+          'id': 'me',
+          'label': 'Me',
+          'emoji': '👤',
+          'facet_type': 'defaultPersonal',
+          'is_default': 1,
+          'links': '[]',
+          'created_at': now,
+          'updated_at': now,
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+        debugPrint('Created default "me" facet');
+      }
+    }
   }
 
   // ==================== FACET CRUD ====================
@@ -84,16 +197,21 @@ class FacetStorage {
   Future<void> saveFacet(ProfileFacet facet) async {
     await _ensureInitialized();
 
+    // Normalize 'default' to 'me'
+    final id = facet.id == 'default' ? 'me' : facet.id;
+    final label = id == 'me' && facet.label == 'Default' ? 'Me' : facet.label;
+
     await _database!.insert(
       'facets',
       {
-        'id': facet.id,
-        'label': facet.label,
+        'id': id,
+        'label': label,
         'emoji': facet.emoji,
         'display_name': facet.displayName,
         'avatar_url': facet.avatarUrl,
         'bio': facet.bio,
         'links': jsonEncode(facet.links.map((l) => l.toJson()).toList()),
+        'facet_type': facet.type.name,
         'is_default': facet.isDefault ? 1 : 0,
         'created_at': facet.createdAt.toIso8601String(),
         'updated_at': facet.updatedAt.toIso8601String(),
@@ -101,18 +219,46 @@ class FacetStorage {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
 
-    debugPrint('Facet saved: ${facet.id}');
+    debugPrint('Facet saved: $id (${facet.type.name})');
+    
+    // NOTE: Profile sync is now handled by the UI layer (FacetEditorScreen)
+    // to avoid circular dependencies between FacetStorage and ProfileService.
+    // When saving the default facet, FacetEditorScreen calls 
+    // ProfileService().syncDefaultFacetToProfile() after this method returns.
   }
 
   Future<ProfileFacet?> getFacet(String id) async {
     await _ensureInitialized();
 
+    // Normalize 'default' to 'me'
+    final normalizedId = id == 'default' ? 'me' : id;
+
     final results = await _database!.query(
       'facets',
       where: 'id = ?',
-      whereArgs: [id],
+      whereArgs: [normalizedId],
     );
 
+    if (results.isEmpty) return null;
+    return _rowToFacet(results.first);
+  }
+
+  /// Get facet by label or ID (case-insensitive) - for hashtag lookup
+  Future<ProfileFacet?> getFacetByLabel(String label) async {
+    await _ensureInitialized();
+    
+    final lowerLabel = label.toLowerCase();
+    
+    // Normalize 'default' to 'me'
+    final searchLabel = lowerLabel == 'default' ? 'me' : lowerLabel;
+    
+    final results = await _database!.query(
+      'facets',
+      where: 'LOWER(label) = ? OR LOWER(id) = ?',
+      whereArgs: [searchLabel, searchLabel],
+      limit: 1,
+    );
+    
     if (results.isEmpty) return null;
     return _rowToFacet(results.first);
   }
@@ -125,45 +271,117 @@ class FacetStorage {
       orderBy: 'is_default DESC, created_at ASC',
     );
 
-    return results.map(_rowToFacet).toList();
+    final facets = results.map(_rowToFacet).toList();
+    
+    // Ensure "me" is always first, then custom, then broadcast
+    facets.sort((a, b) {
+      if (a.isDefaultPersonal) return -1;
+      if (b.isDefaultPersonal) return 1;
+      if (a.isBroadcast && !b.isBroadcast) return 1;
+      if (!a.isBroadcast && b.isBroadcast) return -1;
+      return a.createdAt.compareTo(b.createdAt);
+    });
+    
+    return facets;
   }
 
-  Future<ProfileFacet?> getDefaultFacet() async {
+  /// Get the default "me" facet
+  Future<ProfileFacet> getDefaultFacet() async {
+    await _ensureInitialized();
+
+    // First try by type
+    var results = await _database!.query(
+      'facets',
+      where: 'facet_type = ?',
+      whereArgs: ['defaultPersonal'],
+      limit: 1,
+    );
+
+    // Fallback to 'me' id
+    if (results.isEmpty) {
+      results = await _database!.query(
+        'facets',
+        where: 'id = ?',
+        whereArgs: ['me'],
+        limit: 1,
+      );
+    }
+
+    // Fallback to is_default flag
+    if (results.isEmpty) {
+      results = await _database!.query(
+        'facets',
+        where: 'is_default = 1',
+        limit: 1,
+      );
+    }
+
+    if (results.isEmpty) {
+      // This shouldn't happen, but create if missing
+      await _ensureDefaultFacet();
+      return ProfileFacet.defaultFacet();
+    }
+    
+    return _rowToFacet(results.first);
+  }
+
+  /// Get all broadcast facets (DIX, etc.)
+  Future<List<ProfileFacet>> getBroadcastFacets() async {
     await _ensureInitialized();
 
     final results = await _database!.query(
       'facets',
-      where: 'is_default = 1',
-      limit: 1,
+      where: 'facet_type = ?',
+      whereArgs: ['broadcast'],
+      orderBy: 'created_at ASC',
     );
 
-    if (results.isEmpty) {
-      // Return first facet if no default
-      final all = await getAllFacets();
-      return all.isNotEmpty ? all.first : null;
-    }
-    return _rowToFacet(results.first);
+    return results.map(_rowToFacet).toList();
+  }
+
+  /// Get all custom facets (excluding default and broadcast)
+  Future<List<ProfileFacet>> getCustomFacets() async {
+    await _ensureInitialized();
+
+    final results = await _database!.query(
+      'facets',
+      where: 'facet_type = ?',
+      whereArgs: ['custom'],
+      orderBy: 'created_at ASC',
+    );
+
+    return results.map(_rowToFacet).toList();
   }
 
   Future<void> deleteFacet(String id) async {
     await _ensureInitialized();
 
-    if (id == 'default') {
-      debugPrint('Cannot delete default facet');
+    // Normalize 'default' to 'me'
+    final normalizedId = id == 'default' ? 'me' : id;
+
+    // Cannot delete the default "me" facet
+    final facet = await getFacet(normalizedId);
+    if (facet == null) return;
+    
+    if (!facet.canDelete) {
+      debugPrint('Cannot delete facet: ${facet.id} (${facet.type.name})');
       return;
     }
 
     await _database!.delete(
       'facets',
       where: 'id = ?',
-      whereArgs: [id],
+      whereArgs: [normalizedId],
     );
 
-    debugPrint('Facet deleted: $id');
+    debugPrint('Facet deleted: $normalizedId');
   }
 
   Future<void> setDefaultFacet(String id) async {
     await _ensureInitialized();
+
+    // Normalize 'default' to 'me'
+    final normalizedId = id == 'default' ? 'me' : id;
 
     // Clear all defaults
     await _database!.update(
@@ -176,10 +394,53 @@ class FacetStorage {
       'facets',
       {'is_default': 1},
       where: 'id = ?',
-      whereArgs: [id],
+      whereArgs: [normalizedId],
     );
 
-    debugPrint('Default facet set: $id');
+    debugPrint('Default facet set: $normalizedId');
+  }
+
+  /// Check if a facet exists
+  Future<bool> facetExists(String labelOrId) async {
+    final facet = await getFacetByLabel(labelOrId);
+    return facet != null;
+  }
+
+  /// Get all facet labels for quick validation
+  Future<Set<String>> getAllFacetLabels() async {
+    await _ensureInitialized();
+    
+    final results = await _database!.query(
+      'facets',
+      columns: ['id', 'label'],
+    );
+    
+    final labels = <String>{};
+    for (final row in results) {
+      labels.add((row['id'] as String).toLowerCase());
+      labels.add((row['label'] as String).toLowerCase());
+    }
+    return labels;
+  }
+
+  /// Create facet from hashtag (quick creation)
+  Future<ProfileFacet> createFacetFromHashtag(String hashtag, {
+    String? emoji,
+    FacetType type = FacetType.custom,
+  }) async {
+    final cleanName = hashtag.replaceAll('#', '').toLowerCase();
+    final displayLabel = cleanName[0].toUpperCase() + cleanName.substring(1);
+    
+    final facet = ProfileFacet(
+      id: cleanName,
+      label: displayLabel,
+      emoji: emoji ?? _suggestEmoji(cleanName),
+      type: type,
+      isDefault: false,
+    );
+    
+    await saveFacet(facet);
+    return facet;
   }
 
   // ==================== SETTINGS ====================
@@ -209,7 +470,9 @@ class FacetStorage {
   }
 
   Future<void> setPrimaryFacetId(String id) async {
-    await setSetting('primary_facet_id', id);
+    // Normalize 'default' to 'me'
+    final normalizedId = id == 'default' ? 'me' : id;
+    await setSetting('primary_facet_id', normalizedId);
   }
 
   // ==================== COLLECTION ====================
@@ -221,7 +484,7 @@ class FacetStorage {
 
     return FacetCollection(
       facets: facets,
-      defaultFacetId: defaultFacet?.id,
+      defaultFacetId: defaultFacet.id,
       primaryFacetId: primaryId,
     );
   }
@@ -240,28 +503,30 @@ class FacetStorage {
 
   // ==================== MIGRATION ====================
 
-  /// Migrate from existing ProfileData to facets
+  /// Migrate from existing ProfileData to me@ facet
   Future<void> migrateFromProfileData(ProfileData? data) async {
     await _ensureInitialized();
 
-    // Check if we already have facets
-    final existing = await getAllFacets();
-    if (existing.isNotEmpty) {
-      debugPrint('Facets already exist, skipping migration');
-      return;
+    // Get existing default facet
+    final existing = await getDefaultFacet();
+    
+    // If profile data exists and default facet is empty, migrate
+    if (data != null && !data.isEmpty) {
+      // Only migrate if me@ doesn't have this data yet
+      if (existing.displayName == null && data.displayName != null ||
+          existing.avatarUrl == null && data.avatarUrl != null ||
+          existing.bio == null && data.bio != null) {
+        
+        final updated = existing.copyWith(
+          displayName: existing.displayName ?? data.displayName,
+          avatarUrl: existing.avatarUrl ?? data.avatarUrl,
+          bio: existing.bio ?? data.bio,
+          links: existing.links.isEmpty ? data.links : existing.links,
+        );
+        await saveFacet(updated);
+        debugPrint('Migrated ProfileData to "me" facet');
+      }
     }
-
-    if (data == null || data.isEmpty) {
-      debugPrint('No profile data to migrate');
-      return;
-    }
-
-    // Create default facet from existing profile data
-    final facet = ProfileFacet.fromProfileData(data, id: 'default');
-    await saveFacet(facet);
-    await setDefaultFacet('default');
-
-    debugPrint('Migrated ProfileData to default facet');
   }
 
   // ==================== HELPERS ====================
@@ -278,18 +543,65 @@ class FacetStorage {
       debugPrint('Error parsing links: $e');
     }
 
+    final id = row['id'] as String;
+    final isDefaultId = id == 'default' || id == 'me';
+    
     return ProfileFacet(
-      id: row['id'] as String,
-      label: row['label'] as String,
+      id: isDefaultId ? 'me' : id,  // Normalize 'default' to 'me'
+      label: row['label'] as String? ?? (isDefaultId ? 'Me' : id),
       emoji: row['emoji'] as String? ?? '👤',
       displayName: row['display_name'] as String?,
       avatarUrl: row['avatar_url'] as String?,
       bio: row['bio'] as String?,
       links: links,
-      isDefault: (row['is_default'] as int?) == 1,
+      type: _parseFacetType(row['facet_type'] as String?, isDefaultId),
+      isDefault: (row['is_default'] as int?) == 1 || isDefaultId,
       createdAt: DateTime.tryParse(row['created_at'] as String? ?? '') ?? DateTime.now(),
       updatedAt: DateTime.tryParse(row['updated_at'] as String? ?? '') ?? DateTime.now(),
     );
+  }
+
+  FacetType _parseFacetType(String? value, bool isDefaultId) {
+    if (value != null) {
+      switch (value) {
+        case 'defaultPersonal':
+          return FacetType.defaultPersonal;
+        case 'broadcast':
+          return FacetType.broadcast;
+        case 'system':
+          return FacetType.system;
+        case 'custom':
+          return FacetType.custom;
+      }
+    }
+    // Fallback: infer from ID
+    return isDefaultId ? FacetType.defaultPersonal : FacetType.custom;
+  }
+
+  String _suggestEmoji(String name) {
+    const suggestions = {
+      'work': '💼',
+      'friends': '🎉',
+      'family': '👨‍👩‍👧',
+      'travel': '✈️',
+      'music': '🎵',
+      'dix': '🎵',
+      'gaming': '🎮',
+      'sports': '⚽',
+      'food': '🍕',
+      'tech': '💻',
+      'art': '🎨',
+      'photo': '📷',
+      'fitness': '💪',
+      'crypto': '₿',
+      'business': '📊',
+      'creative': '✨',
+      'blog': '📝',
+      'news': '📰',
+      'email': '📧',
+    };
+    
+    return suggestions[name.toLowerCase()] ?? '📌';
   }
 
   Future<void> close() async {
@@ -303,18 +615,9 @@ class FacetStorage {
     await _database!.delete('facets');
     await _database!.delete('facet_settings');
     
-    // Recreate default facet
-    final now = DateTime.now().toIso8601String();
-    await _database!.insert('facets', {
-      'id': 'default',
-      'label': 'Default',
-      'emoji': '👤',
-      'is_default': 1,
-      'links': '[]',
-      'created_at': now,
-      'updated_at': now,
-    });
+    // Recreate default "me" facet
+    await _ensureDefaultFacet();
     
-    debugPrint('All facets deleted, default recreated');
+    debugPrint('All facets deleted, "me" facet recreated');
   }
 }

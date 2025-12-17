@@ -9,6 +9,7 @@ import '../../core/theme/theme_service.dart';
 import '../../core/financial/payment_service.dart';
 import '../../core/financial/payment_payload.dart';
 import '../../core/financial/idup_router.dart';
+import 'stellar_service.dart';  // ✅ Same folder (lib/ui/financial/)
 import '../../core/discovery/discovery_service.dart';
 import '../../core/gns/identity_wallet.dart';
 
@@ -36,7 +37,7 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
   final _memoController = TextEditingController();
   
   // State
-  String _selectedCurrency = 'EUR';
+  String _selectedCurrency = 'GNS';  // ✅ Default to GNS!
   bool _isSearchingRecipient = false;
   bool _isSending = false;
   String? _recipientPk;
@@ -47,10 +48,14 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
   
   // Services
   PaymentService? _paymentService;
+  IdentityWallet? _wallet;  // ✅ Keep wallet reference for Stellar signing
   final _discoveryService = DiscoveryService();
+  final _stellarService = StellarService();  // ✅ Stellar service
   
-  static const _currencies = ['EUR', 'USD', 'GBP', 'BTC', 'ETH'];
+  // ✅ GNS FIRST!
+  static const _currencies = ['GNS', 'EUR', 'USD', 'GBP', 'BTC', 'ETH'];
   static const _currencySymbols = {
+    'GNS': '✦',   // ✅ GNS Token!
     'EUR': '€',
     'USD': '\$',
     'GBP': '£',
@@ -74,9 +79,9 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
 
   Future<void> _initPaymentService() async {
     try {
-      final wallet = IdentityWallet();
-      await wallet.initialize();
-      _paymentService = PaymentService.instance(wallet);
+      _wallet = IdentityWallet();  // ✅ Store wallet reference
+      await _wallet!.initialize();
+      _paymentService = PaymentService.instance(_wallet!);
       await _paymentService!.initialize();
     } catch (e) {
       debugPrint('Error initializing payment service: $e');
@@ -249,6 +254,7 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                   ),
+                  onChanged: (_) => setState(() {}),  // ✅ Trigger rebuild to update button state
                 ),
               ),
             ],
@@ -578,24 +584,94 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
   }
 
   Future<void> _sendPayment() async {
-    if (_paymentService == null || _recipientPk == null) return;
+    if (_recipientPk == null) return;
     
     setState(() => _isSending = true);
     
-    final result = await _paymentService!.sendPayment(
-      recipientPk: _recipientPk!,
-      recipientHandle: _recipientHandle,
-      amount: _amountController.text,
-      currency: _selectedCurrency,
-      memo: _memoController.text.isEmpty ? null : _memoController.text,
-      route: _selectedRoute?.route,
-    );
-    
-    setState(() {
-      _isSending = false;
-      _sendResult = result;
-      _currentStep = 2;
-    });
+    try {
+      // ✅ GNS tokens go through Stellar network
+      if (_selectedCurrency == 'GNS') {
+        if (_wallet == null) {
+          setState(() {
+            _isSending = false;
+            _sendResult = PaymentSendResult(
+              success: false,
+              error: 'Wallet not initialized',
+            );
+            _currentStep = 2;
+          });
+          return;
+        }
+        
+        // Get sender's Stellar address from GNS key
+        final senderStellarKey = _stellarService.gnsKeyToStellar(_wallet!.publicKey!);
+        
+        // Get private key bytes for signing
+        final privateKeyBytes = _wallet!.privateKeyBytes!;
+        
+        // Parse amount
+        final amount = double.tryParse(_amountController.text) ?? 0.0;
+        
+        if (amount <= 0) {
+          setState(() {
+            _isSending = false;
+            _sendResult = PaymentSendResult(
+              success: false,
+              error: 'Invalid amount',
+            );
+            _currentStep = 2;
+          });
+          return;
+        }
+        
+        // Send GNS via Stellar! 🚀
+        final result = await _stellarService.sendGnsToGnsKey(
+          senderStellarPublicKey: senderStellarKey,
+          senderPrivateKeyBytes: privateKeyBytes,
+          recipientGnsPublicKey: _recipientPk!,
+          amount: amount,
+        );
+        
+        setState(() {
+          _isSending = false;
+          _sendResult = PaymentSendResult(
+            success: result.success,
+            transactionId: result.hash,
+            error: result.error,
+          );
+          _currentStep = 2;
+        });
+        return;
+      }
+      
+      // Other currencies go through IDUP payment rails
+      if (_paymentService == null) return;
+      
+      final result = await _paymentService!.sendPayment(
+        recipientPk: _recipientPk!,
+        recipientHandle: _recipientHandle,
+        amount: _amountController.text,
+        currency: _selectedCurrency,
+        memo: _memoController.text.isEmpty ? null : _memoController.text,
+        route: _selectedRoute?.route,
+      );
+      
+      setState(() {
+        _isSending = false;
+        _sendResult = result;
+        _currentStep = 2;
+      });
+    } catch (e) {
+      debugPrint('Send payment error: $e');
+      setState(() {
+        _isSending = false;
+        _sendResult = PaymentSendResult(
+          success: false,
+          error: e.toString(),
+        );
+        _currentStep = 2;
+      });
+    }
   }
 
   // ==================== STEP 3: RESULT ====================
@@ -649,14 +725,29 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
-                'Transaction ID: ${_sendResult?.transactionId?.substring(0, 12)}...',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontFamily: 'monospace',
-                  color: AppTheme.textMuted(context),
+              if (_sendResult?.transactionId != null)
+                Text(
+                  'Transaction ID: ${_sendResult!.transactionId!.length > 12 ? '${_sendResult!.transactionId!.substring(0, 12)}...' : _sendResult!.transactionId}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                    color: AppTheme.textMuted(context),
+                  ),
                 ),
-              ),
+              // ✅ Stellar Explorer link for GNS transactions
+              if (_selectedCurrency == 'GNS' && _sendResult?.transactionId != null) ...[
+                const SizedBox(height: 16),
+                TextButton.icon(
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('View on Stellar Explorer'),
+                  onPressed: () {
+                    final network = StellarConfig.useTestnet ? 'testnet' : 'public';
+                    final url = 'https://stellar.expert/explorer/$network/tx/${_sendResult?.transactionId}';
+                    debugPrint('Open: $url');
+                    // TODO: Use url_launcher to open in browser
+                  },
+                ),
+              ],
             ] else ...[
               Text(
                 _sendResult?.error ?? 'Unknown error',

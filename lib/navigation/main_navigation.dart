@@ -1,7 +1,7 @@
 /// Main Navigation Screen
 /// 
 /// Bottom navigation with 5 tabs: Home, Messages, Contacts, History, Settings
-/// Action buttons (Send Money, New Message) appear only on Contacts tab.
+/// Globe timeline is now integrated into Messages tab via segmented control.
 /// 
 /// Location: lib/navigation/main_navigation.dart
 
@@ -80,7 +80,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          // Main content
+          // Main content - 5 tabs (Globe is now inside Messages)
           IndexedStack(
             index: _currentIndex,
             children: [
@@ -89,7 +89,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 profileService: widget.profileService,
                 paymentService: _paymentService,
               ),
-              const ThreadListScreen(),
+              const ThreadListScreen(),  // Messages + Globe (segmented)
               ContactsTab(profileService: widget.profileService),
               HistoryScreen(
                 wallet: widget.wallet,

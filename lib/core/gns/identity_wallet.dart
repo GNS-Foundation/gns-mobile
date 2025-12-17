@@ -32,6 +32,7 @@ class IdentityWallet {
   GnsRecord? get localRecord => _localRecord;
   BreadcrumbEngine get breadcrumbEngine => _breadcrumbEngine;
   bool get networkAvailable => _networkAvailable;
+  GnsKeypair? get keypair => _keypair;
 
   // ==================== COMMUNICATION SERVICE SUPPORT ====================
   
@@ -376,6 +377,9 @@ class IdentityWallet {
     );
   }
 
+  // ============================================================
+  // ✅ FIXED: claimHandle() with proper canonical JSON signing
+  // ============================================================
   Future<HandleClaimResult> claimHandle() async {
     final reserved = await _storage.readReservedHandle();
     if (reserved == null) {
@@ -411,31 +415,43 @@ class IdentityWallet {
       try {
         // Get first breadcrumb timestamp
         final firstBreadcrumbAt = await _storage.readFirstBreadcrumbAt();
+        final firstBreadcrumbIso = firstBreadcrumbAt?.toUtc().toIso8601String() ?? 
+            DateTime.now().toUtc().toIso8601String();
         
-        // Build the claim with PoT proof
-        final claim = {
-          'identity': _keypair!.publicKeyHex,
-          'proof': {
-            'breadcrumb_count': stats.breadcrumbCount,
-            'trust_score': stats.trustScore,
-            'first_breadcrumb_at': firstBreadcrumbAt?.toUtc().toIso8601String() ?? 
-                DateTime.now().toUtc().toIso8601String(),
-          },
-          'claimed_at': DateTime.now().toUtc().toIso8601String(),
+        // ✅ FIX: Build proof with sorted keys (alphabetical order)
+        // Server expects: breadcrumb_count, first_breadcrumb_at, trust_score
+        final proof = <String, dynamic>{
+          'breadcrumb_count': stats.breadcrumbCount,
+          'first_breadcrumb_at': firstBreadcrumbIso,
+          'trust_score': stats.trustScore,
         };
         
-        // Sign the entire claim
-        final claimJson = jsonEncode({
+        // ✅ FIX: Create canonical JSON for signing (SORTED KEYS!)
+        // Server's verifyAliasClaim expects exactly this structure:
+        // {"handle":"...","identity":"...","proof":{...}}
+        final dataToSign = _canonicalJson({
           'handle': reserved,
-          ...claim,
+          'identity': _keypair!.publicKeyHex,
+          'proof': proof,
         });
-        final signature = await _keypair!.signToHex(
-          Uint8List.fromList(utf8.encode(claimJson))
-        );
         
         debugPrint('📝 Claiming handle @$reserved on network...');
         debugPrint('   Breadcrumbs: ${stats.breadcrumbCount}');
         debugPrint('   Trust Score: ${stats.trustScore}');
+        debugPrint('   Data to sign: $dataToSign');
+        
+        // Sign the canonical JSON
+        final signature = await _keypair!.signToHex(
+          Uint8List.fromList(utf8.encode(dataToSign))
+        );
+        
+        debugPrint('   Signature: ${signature.substring(0, 32)}...');
+        
+        // Build claim object for API (doesn't need to be canonical)
+        final claim = {
+          'identity': _keypair!.publicKeyHex,
+          'proof': proof,
+        };
         
         // Call the server
         final response = await _apiClient.claimHandle(
@@ -450,6 +466,15 @@ class IdentityWallet {
         } else {
           networkError = response['error']?.toString() ?? 'Network claim failed';
           debugPrint('❌ Network claim failed: $networkError');
+          
+          // ⚠️ IMPORTANT: Don't store locally if network rejected with auth error!
+          // This prevents the "user thinks they have handle but they don't" bug
+          if (networkError == 'Invalid signature') {
+            return HandleClaimResult(
+              success: false,
+              error: 'Signature verification failed. Please try again.',
+            );
+          }
         }
       } catch (e) {
         networkError = e.toString();
@@ -460,12 +485,15 @@ class IdentityWallet {
       debugPrint('⚠️ Network unavailable, storing claim locally');
     }
 
-    // Store locally regardless (can sync later)
-    await _storage.storeClaimedHandle(reserved);
-    await _loadOrCreateLocalRecord();
-    
-    // Publish updated record to network
-    _publishInBackground();
+    // ✅ FIX: Only store locally if network claimed OR network unavailable
+    // Don't store if network rejected (e.g., 401 Invalid signature)
+    if (networkClaimed || !_networkAvailable) {
+      await _storage.storeClaimedHandle(reserved);
+      await _loadOrCreateLocalRecord();
+      
+      // Publish updated record to network
+      _publishInBackground();
+    }
 
     // Return success with appropriate message
     if (networkClaimed) {
@@ -474,13 +502,54 @@ class IdentityWallet {
         handle: reserved,
         message: '🎉 @$reserved is now permanently yours on the GNS Network!',
       );
-    } else {
+    } else if (!_networkAvailable) {
+      // Network was unavailable, stored locally for later sync
+      await _storage.storeClaimedHandle(reserved);
+      await _loadOrCreateLocalRecord();
+      _publishInBackground();
+      
       return HandleClaimResult(
         success: true,
         handle: reserved,
-        message: '@$reserved claimed locally. Network sync: ${networkError ?? "pending"}',
+        message: '@$reserved claimed locally. Will sync when network available.',
+      );
+    } else {
+      // Network rejected the claim
+      return HandleClaimResult(
+        success: false,
+        error: networkError ?? 'Failed to claim handle on network',
       );
     }
+  }
+
+  // ============================================================
+  // ✅ NEW: Create canonical JSON with sorted keys
+  // This matches the server's canonicalJson() function exactly
+  // ============================================================
+  String _canonicalJson(dynamic obj) {
+    if (obj == null) return 'null';
+    if (obj is bool) return obj.toString();
+    if (obj is num) {
+      // Handle integers vs doubles to match JavaScript's JSON.stringify
+      // JavaScript: JSON.stringify(100.0) => "100"
+      // Dart: jsonEncode(100.0) => "100.0" (WRONG!)
+      if (obj is int) return obj.toString();
+      if (obj == obj.truncateToDouble()) return obj.toInt().toString();
+      return obj.toString();
+    }
+    if (obj is String) return jsonEncode(obj); // Handles escaping quotes, etc.
+    if (obj is List) {
+      return '[${obj.map(_canonicalJson).join(',')}]';
+    }
+    if (obj is Map) {
+      // ✅ CRITICAL: Sort keys alphabetically!
+      final sortedKeys = obj.keys.map((k) => k.toString()).toList()..sort();
+      final pairs = sortedKeys.map((key) {
+        return '"$key":${_canonicalJson(obj[key])}';
+      });
+      return '{${pairs.join(',')}}';
+    }
+    return jsonEncode(obj);
   }
 
   bool _isValidHandle(String handle) => RegExp(r'^[a-z0-9_]{3,20}$').hasMatch(handle);

@@ -1,10 +1,11 @@
-/// Facet Editor Screen - Phase 4c (v3)
+/// Facet Editor Screen - Phase 4c (v4 - with Profile Sync)
 /// 
 /// Create and edit profile facets with:
 /// - Auto-fill Facet ID from templates
 /// - Tap outside to dismiss keyboard
 /// - Avatar photo or emoji selection
 /// - Bio and links management
+/// - ✅ NEW: Auto-sync to network when saving default facet
 /// 
 /// Location: lib/ui/screens/facet_editor_screen.dart
 
@@ -14,6 +15,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/profile/profile_facet.dart';
 import '../../core/profile/profile_module.dart';
 import '../../core/profile/facet_storage.dart';
+import '../../core/profile/profile_service.dart';  // ✅ NEW: Import for sync
 
 class FacetEditorScreen extends StatefulWidget {
   final ProfileFacet? existingFacet;
@@ -31,6 +33,7 @@ class FacetEditorScreen extends StatefulWidget {
 
 class _FacetEditorScreenState extends State<FacetEditorScreen> {
   final _storage = FacetStorage();
+  final _profileService = ProfileService();  // ✅ NEW: For syncing
   final _formKey = GlobalKey<FormState>();
   
   final _idController = TextEditingController();
@@ -658,12 +661,22 @@ class _FacetEditorScreenState extends State<FacetEditorScreen> {
         await _storage.setDefaultFacet(facetId);
       }
 
+      // ✅ NEW: Sync to network if this is the default facet (me@)
+      // This ensures avatar and profile data are published to the server
+      final isDefaultFacet = _isDefault || facetId == 'me' || facetId == 'default';
+      if (isDefaultFacet) {
+        debugPrint('📤 Syncing default facet to network...');
+        _syncProfileToNetwork();  // Fire and forget
+      }
+
       setState(() => _saving = false);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_isEditing ? 'Facet updated!' : 'Facet created!'),
+            content: Text(_isEditing 
+                ? 'Facet updated!' 
+                : 'Facet created!${isDefaultFacet ? ' Syncing to network...' : ''}'),
             backgroundColor: const Color(0xFF10B981),
           ),
         );
@@ -677,5 +690,27 @@ class _FacetEditorScreenState extends State<FacetEditorScreen> {
         );
       }
     }
+  }
+
+  // ✅ NEW: Sync profile to network (fire and forget)
+  void _syncProfileToNetwork() {
+    _profileService.syncDefaultFacetToProfile().then((result) {
+      if (result.success) {
+        debugPrint('✅ Profile synced to network!');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ Profile synced to network!'),
+              backgroundColor: Color(0xFF10B981),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        debugPrint('⚠️ Profile sync failed: ${result.error}');
+      }
+    }).catchError((e) {
+      debugPrint('❌ Profile sync error: $e');
+    });
   }
 }

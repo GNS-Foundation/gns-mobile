@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/gns/identity_wallet.dart';
 import '../../core/theme/theme_service.dart';
-import '../../services/stellar_service.dart';
+import '../financial/stellar_service.dart';
 
 class SendGnsSheet extends StatefulWidget {
   final IdentityWallet wallet;

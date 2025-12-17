@@ -559,11 +559,18 @@ class CommunicationService {
         payloadJson as Map<String, dynamic>,
       );
       
+      // Get sender's avatar (for thread display)
+      final senderAvatarUrl = await _fetchSenderAvatarUrl(
+        envelope.fromPublicKey, 
+        envelope.fromHandle,
+      );
+      
       // Get or create thread
       final thread = await _storage.getOrCreateDirectThread(
         myPublicKey: _wallet.publicKey!,
         otherPublicKey: envelope.fromPublicKey,
         otherHandle: envelope.fromHandle,
+        otherAvatarUrl: senderAvatarUrl,  // ✅ NEW: Pass avatar
       );
       
       // Create message (but don't save yet - caller will batch save)
@@ -700,6 +707,30 @@ class CommunicationService {
       return info;
     } catch (e) {
       debugPrint('❌ Error resolving handle info $handle: $e');
+      return null;
+    }
+  }
+
+  /// Fetch sender's avatar URL from their profile
+  Future<String?> _fetchSenderAvatarUrl(String publicKey, String? handle) async {
+    try {
+      // Try to get from handle resolution first (has avatar)
+      if (handle != null) {
+        final info = await resolveHandleInfo(handle);
+        if (info != null && info['avatar_url'] != null) {
+          return info['avatar_url'] as String;
+        }
+      }
+      
+      // Try to get from identity record
+      final identity = await _relayChannel.getIdentity(publicKey);
+      if (identity != null && identity['avatar_url'] != null) {
+        return identity['avatar_url'] as String;
+      }
+      
+      return null;
+    } catch (e) {
+      debugPrint('⚠️ Failed to fetch sender avatar: $e');
       return null;
     }
   }

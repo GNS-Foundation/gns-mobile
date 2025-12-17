@@ -364,6 +364,53 @@ class GnsNetworkService {
     }
   }
 
+  // ==================== SEARCH ====================
+
+  /// Search identities by partial handle match
+  /// Returns list of identity maps for live search
+  Future<List<Map<String, dynamic>>> searchIdentities(String query) async {
+    if (query.isEmpty) return [];
+    
+    try {
+      final response = await _dio.get(
+        '/web/search',
+        queryParameters: {
+          'q': query,
+          'type': 'identity',
+          'limit': '20',
+        },
+      );
+      
+      if (response.statusCode == 200) {
+        final data = response.data;
+        
+        if (data['success'] == true && data['data'] != null) {
+          final results = data['data']['results'] as List<dynamic>? ?? [];
+          
+          return results.map((r) {
+            final identity = r['identity'] as Map<String, dynamic>?;
+            if (identity == null) return <String, dynamic>{};
+            
+            return {
+              'handle': identity['handle'],
+              'displayName': identity['displayName'],
+              'publicKey': identity['publicKey'],
+              'avatarUrl': identity['avatarUrl'],
+              'trustScore': identity['trustScore'],
+              'breadcrumbCount': identity['breadcrumbCount'],
+              'isVerified': identity['isVerified'],
+            };
+          }).where((m) => m.isNotEmpty).toList().cast<Map<String, dynamic>>();
+        }
+      }
+      
+      return [];
+    } catch (e) {
+      debugPrint('Search identities network error: $e');
+      return [];
+    }
+  }
+
   // ==================== HEALTH CHECK ====================
 
   /// Check if the network is reachable

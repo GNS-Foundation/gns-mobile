@@ -6,12 +6,20 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
 import 'core/gns/identity_wallet.dart';
 import 'ui/screens/handle_management_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Supabase
+  await Supabase.initialize(
+    url: 'https://nsthmevgpkskmgmubdju.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zdGhtZXZncGtza21nbXViZGp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ2ODg3NjIsImV4cCI6MjA4MDI2NDc2Mn0.rwx4iV8Me_lrxE-wl6PExO7M0_YfdBSdFuTB09hDoc8',
+  );
+  
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,

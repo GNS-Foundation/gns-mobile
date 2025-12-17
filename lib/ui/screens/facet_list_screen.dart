@@ -1,13 +1,15 @@
-/// Facet List Screen - Phase 4c (v2)
+/// Facet List Screen - Updated for Meta-Identity Architecture
 /// 
-/// Displays all profile facets with template selection.
-/// Templates now properly auto-fill the Facet ID.
+/// Displays all profile facets with me@ first.
+/// Includes broadcast templates (DIX).
+/// Shows facet type badges.
 /// 
 /// Location: lib/ui/screens/facet_list_screen.dart
 
 import 'package:flutter/material.dart';
 import '../../core/profile/profile_facet.dart';
 import '../../core/profile/facet_storage.dart';
+import '../../core/theme/theme_service.dart';
 import 'facet_editor_screen.dart';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -59,50 +61,22 @@ class _FacetListScreenState extends State<FacetListScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : _facets.isEmpty
-              ? _buildEmptyState()
-              : _buildFacetList(),
+          : _buildFacetList(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddFacetSheet,
         icon: const Icon(Icons.add),
         label: const Text('ADD FACET'),
-        backgroundColor: const Color(0xFF3B82F6),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text('🎭', style: TextStyle(fontSize: 64)),
-            const SizedBox(height: 16),
-            const Text(
-              'No Facets Yet',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Create different profiles for different audiences.\nSame identity, different faces.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: const Color(0xFF8B949E)),
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: _showAddFacetSheet,
-              icon: const Icon(Icons.add),
-              label: const Text('CREATE YOUR FIRST FACET'),
-            ),
-          ],
-        ),
+        backgroundColor: AppTheme.primary,
       ),
     );
   }
 
   Widget _buildFacetList() {
+    // Separate by type
+    final defaultFacet = _facets.where((f) => f.isDefaultPersonal).toList();
+    final broadcastFacets = _facets.where((f) => f.isBroadcast).toList();
+    final customFacets = _facets.where((f) => f.isCustom).toList();
+    
     return RefreshIndicator(
       onRefresh: _loadFacets,
       child: ListView(
@@ -110,7 +84,7 @@ class _FacetListScreenState extends State<FacetListScreen> {
         children: [
           // Explanation Card
           Card(
-            color: const Color(0xFF1E3A5F).withOpacity(0.3),
+            color: AppTheme.primary.withValues(alpha: 0.1),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -127,7 +101,7 @@ class _FacetListScreenState extends State<FacetListScreen> {
                         ),
                         Text(
                           'Same @handle, same trust, different presentation.',
-                          style: TextStyle(color: const Color(0xFF8B949E), fontSize: 12),
+                          style: TextStyle(color: AppTheme.textSecondary(context), fontSize: 12),
                         ),
                       ],
                     ),
@@ -138,18 +112,84 @@ class _FacetListScreenState extends State<FacetListScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Facet List
-          ..._facets.map((facet) => _buildFacetCard(facet)),
+          // Default "me@" facet - always first
+          if (defaultFacet.isNotEmpty) ...[
+            _buildSectionHeader('DEFAULT FACET', Icons.person, AppTheme.primary),
+            const SizedBox(height: 8),
+            ...defaultFacet.map((facet) => _buildFacetCard(facet)),
+            const SizedBox(height: 16),
+          ],
+
+          // Broadcast facets (DIX, etc.)
+          if (broadcastFacets.isNotEmpty) ...[
+            _buildSectionHeader('BROADCAST CHANNELS', Icons.campaign, const Color(0xFF8B5CF6)),
+            const SizedBox(height: 8),
+            ...broadcastFacets.map((facet) => _buildFacetCard(facet)),
+            const SizedBox(height: 16),
+          ],
+
+          // Custom facets
+          if (customFacets.isNotEmpty) ...[
+            _buildSectionHeader('CUSTOM FACETS', Icons.face, const Color(0xFFF97316)),
+            const SizedBox(height: 8),
+            ...customFacets.map((facet) => _buildFacetCard(facet)),
+          ],
+
+          // Empty state for custom facets
+          if (customFacets.isEmpty && broadcastFacets.isEmpty) ...[
+            const SizedBox(height: 24),
+            Center(
+              child: Column(
+                children: [
+                  Text(
+                    'No custom facets yet',
+                    style: TextStyle(color: AppTheme.textSecondary(context)),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: _showAddFacetSheet,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Create your first facet'),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
+  Widget _buildSectionHeader(String title, IconData icon, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: color,
+            letterSpacing: 1,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildFacetCard(ProfileFacet facet) {
     final avatarImage = facet.avatarUrl != null ? _decodeAvatar(facet.avatarUrl!) : null;
+    final color = _getFacetColor(facet);
     
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: facet.isDefaultPersonal || facet.isBroadcast
+            ? BorderSide(color: color.withValues(alpha: 0.3), width: 1)
+            : BorderSide.none,
+      ),
       child: InkWell(
         onTap: () => _editFacet(facet),
         borderRadius: BorderRadius.circular(12),
@@ -160,7 +200,7 @@ class _FacetListScreenState extends State<FacetListScreen> {
               // Avatar/Emoji
               CircleAvatar(
                 radius: 28,
-                backgroundColor: _getFacetColor(facet.id).withOpacity(0.2),
+                backgroundColor: color.withValues(alpha: 0.2),
                 backgroundImage: avatarImage != null ? MemoryImage(avatarImage) : null,
                 child: avatarImage == null
                     ? Text(facet.emoji, style: const TextStyle(fontSize: 24))
@@ -176,33 +216,21 @@ class _FacetListScreenState extends State<FacetListScreen> {
                     Row(
                       children: [
                         Text(
-                          facet.label,
+                          '#${facet.id}',
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        if (facet.isDefault) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF10B981),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Text(
-                              'DEFAULT',
-                              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        ],
+                        const SizedBox(width: 8),
+                        _buildTypeBadge(facet),
                       ],
                     ),
                     if (facet.displayName != null) ...[
                       const SizedBox(height: 2),
                       Text(
                         facet.displayName!,
-                        style: TextStyle(color: const Color(0xFF8B949E)),
+                        style: TextStyle(color: AppTheme.textSecondary(context)),
                       ),
                     ],
                     if (facet.bio != null) ...[
@@ -211,7 +239,7 @@ class _FacetListScreenState extends State<FacetListScreen> {
                         facet.bio!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: const Color(0xFF6E7681), fontSize: 12),
+                        style: TextStyle(color: AppTheme.textMuted(context), fontSize: 12),
                       ),
                     ],
                     // Show link icons
@@ -230,12 +258,62 @@ class _FacetListScreenState extends State<FacetListScreen> {
                 ),
               ),
               
-              const Icon(Icons.chevron_right, color: Color(0xFF6E7681)),
+              // Delete button (only for deletable facets)
+              if (facet.canDelete)
+                IconButton(
+                  icon: Icon(Icons.delete_outline, color: AppTheme.textMuted(context), size: 20),
+                  onPressed: () => _confirmDeleteFacet(facet),
+                )
+              else
+                const SizedBox(width: 8),
+              
+              Icon(Icons.chevron_right, color: AppTheme.textMuted(context)),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Widget _buildTypeBadge(ProfileFacet facet) {
+    if (facet.isDefaultPersonal) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: AppTheme.primary,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Text(
+          'DEFAULT',
+          style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+      );
+    }
+    
+    if (facet.isBroadcast) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
+          ),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.campaign, size: 10, color: Colors.white),
+            SizedBox(width: 3),
+            Text(
+              'BROADCAST',
+              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+          ],
+        ),
+      );
+    }
+    
+    return const SizedBox.shrink();
   }
 
   void _showAddFacetSheet() {
@@ -244,12 +322,13 @@ class _FacetListScreenState extends State<FacetListScreen> {
     
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF161B22),
+      backgroundColor: AppTheme.surface(context),
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -261,7 +340,7 @@ class _FacetListScreenState extends State<FacetListScreen> {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF30363D),
+                    color: AppTheme.border(context),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -275,9 +354,44 @@ class _FacetListScreenState extends State<FacetListScreen> {
               const SizedBox(height: 8),
               Text(
                 'Choose a template or start from scratch',
-                style: TextStyle(color: const Color(0xFF8B949E)),
+                style: TextStyle(color: AppTheme.textSecondary(context)),
               ),
               const SizedBox(height: 20),
+              
+              // Broadcast Templates Section
+              if (!usedIds.contains('dix')) ...[
+                Text(
+                  'BROADCAST CHANNELS',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF8B5CF6),
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _TemplateChip(
+                  emoji: '🎵',
+                  label: 'DIX',
+                  subtitle: 'Public broadcasting',
+                  color: const Color(0xFF8B5CF6),
+                  isBroadcast: true,
+                  onTap: () => _createFromTemplate('dix', FacetType.broadcast),
+                ),
+                const SizedBox(height: 16),
+              ],
+              
+              // Personal Facets Section
+              Text(
+                'PERSONAL FACETS',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFFF97316),
+                  letterSpacing: 1,
+                ),
+              ),
+              const SizedBox(height: 12),
               
               // Templates
               Wrap(
@@ -289,42 +403,42 @@ class _FacetListScreenState extends State<FacetListScreen> {
                       emoji: '💼',
                       label: 'Work',
                       color: const Color(0xFF3B82F6),
-                      onTap: () => _createFromTemplate('work'),
+                      onTap: () => _createFromTemplate('work', FacetType.custom),
                     ),
                   if (!usedIds.contains('friends'))
                     _TemplateChip(
                       emoji: '🎉',
                       label: 'Friends',
                       color: const Color(0xFFF97316),
-                      onTap: () => _createFromTemplate('friends'),
+                      onTap: () => _createFromTemplate('friends', FacetType.custom),
                     ),
                   if (!usedIds.contains('family'))
                     _TemplateChip(
                       emoji: '👨‍👩‍👧',
                       label: 'Family',
                       color: const Color(0xFFEC4899),
-                      onTap: () => _createFromTemplate('family'),
+                      onTap: () => _createFromTemplate('family', FacetType.custom),
                     ),
                   if (!usedIds.contains('travel'))
                     _TemplateChip(
                       emoji: '✈️',
                       label: 'Travel',
                       color: const Color(0xFF10B981),
-                      onTap: () => _createFromTemplate('travel'),
+                      onTap: () => _createFromTemplate('travel', FacetType.custom),
                     ),
                   if (!usedIds.contains('creative'))
                     _TemplateChip(
                       emoji: '🎨',
                       label: 'Creative',
                       color: const Color(0xFF8B5CF6),
-                      onTap: () => _createFromTemplate('creative'),
+                      onTap: () => _createFromTemplate('creative', FacetType.custom),
                     ),
                   if (!usedIds.contains('gaming'))
                     _TemplateChip(
                       emoji: '🎮',
                       label: 'Gaming',
                       color: const Color(0xFFEF4444),
-                      onTap: () => _createFromTemplate('gaming'),
+                      onTap: () => _createFromTemplate('gaming', FacetType.custom),
                     ),
                 ],
               ),
@@ -352,7 +466,7 @@ class _FacetListScreenState extends State<FacetListScreen> {
     );
   }
 
-  void _createFromTemplate(String templateId) async {
+  void _createFromTemplate(String templateId, FacetType type) async {
     Navigator.pop(context); // Close bottom sheet
     
     ProfileFacet templateFacet;
@@ -374,6 +488,9 @@ class _FacetListScreenState extends State<FacetListScreen> {
         break;
       case 'gaming':
         templateFacet = ProfileFacet.gamingTemplate();
+        break;
+      case 'dix':
+        templateFacet = ProfileFacet.dixTemplate();
         break;
       default:
         templateFacet = ProfileFacet.defaultFacet();
@@ -414,8 +531,51 @@ class _FacetListScreenState extends State<FacetListScreen> {
     _loadFacets();
   }
 
-  Color _getFacetColor(String id) {
-    switch (id) {
+  void _confirmDeleteFacet(ProfileFacet facet) {
+    if (!facet.canDelete) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot delete this facet')),
+      );
+      return;
+    }
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${facet.label}?'),
+        content: Text(
+          'This will permanently delete the ${facet.id}@ facet. '
+          'Any messages sent with this facet will remain but the facet cannot be recovered.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await _storage.deleteFacet(facet.id);
+              _loadFacets();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('${facet.label} deleted')),
+                );
+              }
+            },
+            style: TextButton.styleFrom(foregroundColor: AppTheme.error),
+            child: const Text('DELETE'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _getFacetColor(ProfileFacet facet) {
+    if (facet.isDefaultPersonal) return AppTheme.primary;
+    if (facet.isBroadcast) return const Color(0xFF8B5CF6);
+    
+    switch (facet.id) {
       case 'work': return const Color(0xFF3B82F6);
       case 'friends': return const Color(0xFFF97316);
       case 'family': return const Color(0xFFEC4899);
@@ -441,27 +601,111 @@ class _FacetListScreenState extends State<FacetListScreen> {
 class _TemplateChip extends StatelessWidget {
   final String emoji;
   final String label;
+  final String? subtitle;
   final Color color;
+  final bool isBroadcast;
   final VoidCallback onTap;
 
   const _TemplateChip({
     required this.emoji,
     required this.label,
+    this.subtitle,
     required this.color,
+    this.isBroadcast = false,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (isBroadcast) {
+      // Full-width broadcast chip
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                color.withValues(alpha: 0.15),
+                const Color(0xFFEC4899).withValues(alpha: 0.1),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color.withValues(alpha: 0.3)),
+          ),
+          child: Row(
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 28)),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          label,
+                          style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [color, const Color(0xFFEC4899)],
+                            ),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.campaign, size: 10, color: Colors.white),
+                              SizedBox(width: 3),
+                              Text(
+                                'BROADCAST',
+                                style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (subtitle != null)
+                      Text(
+                        subtitle!,
+                        style: TextStyle(
+                          color: AppTheme.textSecondary(context),
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Icon(Icons.add_circle, color: color),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    // Regular chip
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.15),
+          color: color.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.3)),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

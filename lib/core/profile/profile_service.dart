@@ -1,4 +1,4 @@
-// Profile Service - Phase 4c
+// Profile Service - Phase 4c + Live Search
 //
 // Central service coordinating all profile-related operations:
 // - Profile management (read/update)
@@ -6,6 +6,7 @@
 // - Contact management
 // - QR code generation/parsing
 // - Profile Facets (Phase 4c)
+// - Live Search (NEW)
 //
 // Location: lib/core/profile/profile_service.dart
 
@@ -179,6 +180,60 @@ class ProfileService {
     return _facetStorage.getFacetCollection();
   }
 
+  /// Sync the default facet's data (including avatar) to the GNS record
+  /// This ensures the avatar is published to the network so others can see it
+  Future<ProfileUpdateResult> syncDefaultFacetToProfile() async {
+    await _ensureInitialized();
+    
+    try {
+      // Get the default facet (which has the avatar)
+      final defaultFacet = await getDefaultFacet();
+      if (defaultFacet == null) {
+        debugPrint('⚠️ No default facet to sync');
+        return ProfileUpdateResult(
+          success: false,
+          error: 'No default facet found',
+        );
+      }
+      
+      debugPrint('🔄 Syncing default facet to profile...');
+      debugPrint('   Facet ID: ${defaultFacet.id}');
+      debugPrint('   Display Name: ${defaultFacet.displayName}');
+      debugPrint('   Bio: ${defaultFacet.bio?.substring(0, (defaultFacet.bio?.length ?? 0).clamp(0, 20))}...');
+      debugPrint('   Avatar: ${defaultFacet.avatarUrl != null ? "YES (${defaultFacet.avatarUrl!.length} bytes)" : "NO"}');
+      
+      // Get current profile to preserve links and other fields
+      final currentProfile = await getMyProfile();
+      
+      // Create updated profile with facet data
+      final updatedProfile = ProfileData(
+        displayName: defaultFacet.displayName ?? currentProfile?.displayName,
+        bio: defaultFacet.bio ?? currentProfile?.bio,
+        avatarUrl: defaultFacet.avatarUrl,  // ✅ THE KEY: Include avatar!
+        links: currentProfile?.links ?? [],
+        locationPublic: currentProfile?.locationPublic ?? false,
+        locationResolution: currentProfile?.locationResolution ?? 7,
+      );
+      
+      // This calls _wallet.updateProfileModule() and then syncs to network
+      final result = await updateProfile(updatedProfile);
+      
+      if (result.success) {
+        debugPrint('✅ Profile synced to network with avatar!');
+      } else {
+        debugPrint('❌ Profile sync failed: ${result.error}');
+      }
+      
+      return result;
+    } catch (e) {
+      debugPrint('❌ Error syncing facet to profile: $e');
+      return ProfileUpdateResult(
+        success: false,
+        error: e.toString(),
+      );
+    }
+  }
+
   // ==================== IDENTITY LOOKUP ====================
 
   /// Look up identity by handle
@@ -308,6 +363,70 @@ class ProfileService {
 
     // Otherwise try as handle
     return lookupByHandle(trimmed);
+  }
+
+  // ==================== LIVE SEARCH (NEW) ====================
+
+  /// Search identities with partial matching (for live search)
+  /// Returns list of SearchResult for live search UI
+  Future<List<SearchResult>> searchIdentities(String query) async {
+    await _ensureInitialized();
+    
+    final cleanQuery = query.replaceAll('@', '').toLowerCase().trim();
+    
+    if (cleanQuery.isEmpty) return [];
+
+    try {
+      // Call the /web/search API endpoint
+      final results = await _network.searchIdentities(cleanQuery);
+      
+      return results.map((r) => SearchResult(
+        type: SearchResultType.network,
+        handle: r['handle'] as String?,
+        displayName: r['displayName'] as String?,
+        publicKey: r['publicKey'] as String? ?? '',
+        avatarUrl: r['avatarUrl'] as String?,
+        trustScore: (r['trustScore'] as num?)?.toDouble(),
+        isLocal: false,
+      )).where((r) => r.publicKey.isNotEmpty).toList();
+      
+    } catch (e) {
+      debugPrint('Search identities error: $e');
+      
+      // Fallback: try exact handle lookup
+      try {
+        final handleResult = await lookupByHandle(cleanQuery);
+        if (handleResult.success && handleResult.identity != null) {
+          final id = handleResult.identity!;
+          return [
+            SearchResult(
+              type: SearchResultType.network,
+              handle: id.handle,
+              displayName: id.displayName,
+              publicKey: id.publicKey,
+              avatarUrl: id.avatarUrl,
+              trustScore: id.trustScore,
+              isLocal: false,
+            ),
+          ];
+        }
+      } catch (_) {}
+      
+      return [];
+    }
+  }
+
+  /// Add search query to history
+  Future<void> addToSearchHistory(String query) async {
+    await _ensureInitialized();
+    
+    try {
+      await _contacts.addSearchHistory(SearchHistoryEntry(
+        query: query,
+      ));
+    } catch (e) {
+      debugPrint('Failed to save search history: $e');
+    }
   }
 
   // ==================== CONTACTS ====================
@@ -652,5 +771,29 @@ class QrParseResult {
     this.qrDisplayName,
     this.notFoundOnNetwork = false,
     this.facetId,
+  });
+}
+
+// ==================== SEARCH RESULT (NEW) ====================
+
+enum SearchResultType { contact, network }
+
+class SearchResult {
+  final SearchResultType type;
+  final String? handle;
+  final String? displayName;
+  final String publicKey;
+  final String? avatarUrl;
+  final bool isLocal;
+  final double? trustScore;
+
+  SearchResult({
+    required this.type,
+    this.handle,
+    this.displayName,
+    required this.publicKey,
+    this.avatarUrl,
+    this.isLocal = false,
+    this.trustScore,
   });
 }

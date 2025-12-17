@@ -115,23 +115,26 @@ class BreadcrumbEngine {
   StreamSubscription? _accelerometerSubscription;
   StreamSubscription? _gyroscopeSubscription;
 
-  Duration collectionInterval = const Duration(minutes: 10);
+  Duration collectionInterval = const Duration(seconds: 30);  // ← TESTING: 30 seconds auto-drop
   int h3Resolution = H3Quantizer.defaultResolution;
 
   // Location deduplication settings
-  bool requireMovement = true;
-  double minimumDistanceMeters = 50.0;  // Minimum distance from last drop for instant breadcrumb
+  bool requireMovement = false;  // ← TESTING: No movement required
+  double minimumDistanceMeters = 0.0;  // ← TESTING: No minimum distance
   double maximumSpeedKmh = 200.0;  // Maximum plausible speed
   
   // ⚠️ TESTING CONFIGURATION - CHANGE THESE FOR PRODUCTION!
   // 
   // FOR TESTING (collect 100 at same location):
-  int maxSameLocationBreadcrumbs = 100;  // ← TESTING: 100 (allows all at desk)
-  Duration minTimeBetweenDrops = const Duration(seconds: 10);  // ← TESTING: 10 seconds
+  int maxSameLocationBreadcrumbs = 999999;  // ← TESTING: No limit
+  Duration minTimeBetweenDrops = const Duration(seconds: 10);  // ← TESTING: 10 seconds manual cooldown
   
   // FOR PRODUCTION (genuine movement required):
+  // Duration collectionInterval = const Duration(minutes: 10);  // ← PRODUCTION: 10 minutes
+  // bool requireMovement = true;  // ← PRODUCTION: Movement required
+  // double minimumDistanceMeters = 50.0;  // ← PRODUCTION: 50m minimum
   // int maxSameLocationBreadcrumbs = 10;  // ← PRODUCTION: 10 (home/office limit)
-  // Duration minTimeBetweenDrops = const Duration(minutes: 3);  // ← PRODUCTION: 3 minutes: 3 minutes
+  // Duration minTimeBetweenDrops = const Duration(minutes: 3);  // ← PRODUCTION: 3 minutes
 
   Function(BreadcrumbBlock)? onBreadcrumbDropped;
   Function(BreadcrumbDropResult)? onDropResult;  // NEW: Callback for any drop attempt
@@ -216,7 +219,10 @@ class BreadcrumbEngine {
     });
 
     _setState(BreadcrumbEngineState.collecting);
-    debugPrint('Collection started (every ${collectionInterval.inMinutes} min)');
+    final intervalStr = collectionInterval.inMinutes > 0 
+        ? '${collectionInterval.inMinutes} min' 
+        : '${collectionInterval.inSeconds} sec';
+    debugPrint('Collection started (every $intervalStr)');
   }
 
   void stopCollection() {

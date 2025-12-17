@@ -1,8 +1,9 @@
 // ===========================================
-// GNS Token Layer - Stellar Service (v2)
+// GNS Token Layer - Stellar Service (v3)
 // ===========================================
 // Full Stellar integration with transaction signing
 // Uses stellar_flutter_sdk for client-side signing
+// v3: Added mainnet account funding via createAccount operation
 
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
@@ -18,9 +19,17 @@ class StellarConfig {
   static const String horizonMainnet = 'https://horizon.stellar.org';
   static const String networkPassphraseMainnet = 'Public Global Stellar Network ; September 2015';
   
-  // GNS Token Configuration (TESTNET)
+  // GNS Token Configuration (MAINNET)
   static const String gnsTokenCode = 'GNS';
   static const String gnsIssuerPublic = 'GBVZTFST4PIPV5C3APDIVULNZYZENQSLGDSOKOVQI77GSMT6WVYGF5GL';
+  
+  // Distribution account for funding new users (MAINNET)
+  // ⚠️ This should ideally be loaded from secure storage/environment
+  static const String distributionPublic = 'YOUR_DISTRIBUTION_PUBLIC_KEY';  // TODO: Set this
+  static const String distributionSecret = 'YOUR_DISTRIBUTION_SECRET_KEY';  // TODO: Set this securely
+  
+  // Starting balance for new accounts (minimum ~1 XLM for account + 0.5 for trustline reserve)
+  static const String startingBalanceXlm = '1.5';
   
   // Use testnet by default
   static bool useTestnet = false;
@@ -139,6 +148,74 @@ class StellarService {
     } catch (e) {
       debugPrint('Friendbot failed: $e');
       return false;
+    }
+  }
+  
+  /// Fund account on Mainnet by creating it with XLM from distribution account
+  /// This uses the createAccount operation to fund new Stellar accounts
+  Future<TransactionResult> fundAccountMainnet(String newAccountPublicKey) async {
+    if (StellarConfig.useTestnet) {
+      debugPrint('Use fundAccountTestnet for testnet');
+      return TransactionResult(success: false, error: 'Use fundAccountTestnet for testnet');
+    }
+    
+    _ensureInitialized();
+    
+    try {
+      debugPrint('🚀 Funding new account on Mainnet: $newAccountPublicKey');
+      
+      // Load distribution account keypair
+      final distributionKeypair = KeyPair.fromSecretSeed(StellarConfig.distributionSecret);
+      
+      // Verify distribution account matches config
+      if (distributionKeypair.accountId != StellarConfig.distributionPublic) {
+        debugPrint('⚠️ Distribution keypair mismatch!');
+      }
+      
+      // Load distribution account
+      final distributionAccount = await _sdk.accounts.account(StellarConfig.distributionPublic);
+      
+      // Build createAccount transaction
+      final transaction = TransactionBuilder(distributionAccount)
+          .addOperation(
+            CreateAccountOperationBuilder(
+              newAccountPublicKey,
+              StellarConfig.startingBalanceXlm,
+            ).build(),
+          )
+          .build();
+      
+      // Sign with distribution key
+      transaction.sign(distributionKeypair, StellarConfig.network);
+      
+      // Submit transaction
+      final response = await _sdk.submitTransaction(transaction);
+      
+      if (response.success) {
+        debugPrint('✅ Account created and funded with ${StellarConfig.startingBalanceXlm} XLM!');
+        debugPrint('   Hash: ${response.hash}');
+        return TransactionResult(success: true, hash: response.hash);
+      } else {
+        final error = response.extras?.resultCodes?.operationsResultCodes?.join(', ') ?? 'Unknown error';
+        debugPrint('❌ Account creation failed: $error');
+        return TransactionResult(success: false, error: error);
+      }
+    } catch (e) {
+      debugPrint('❌ Fund account error: $e');
+      return TransactionResult(success: false, error: e.toString());
+    }
+  }
+  
+  /// Fund account (works on both testnet and mainnet)
+  Future<TransactionResult> fundAccount(String stellarPublicKey) async {
+    if (StellarConfig.useTestnet) {
+      final success = await fundAccountTestnet(stellarPublicKey);
+      return TransactionResult(
+        success: success,
+        error: success ? null : 'Friendbot failed',
+      );
+    } else {
+      return fundAccountMainnet(stellarPublicKey);
     }
   }
   
@@ -332,6 +409,7 @@ class StellarService {
   }
   
   /// Create trustline AND claim all GNS balances in one flow
+  /// Now includes account funding for mainnet!
   Future<TransactionResult> claimAllGnsTokens({
     required String stellarPublicKey,
     required Uint8List privateKeyBytes,
@@ -339,11 +417,30 @@ class StellarService {
     _ensureInitialized();
     
     try {
-      // First check if trustline exists
+      // First check if account exists
+      final exists = await accountExists(stellarPublicKey);
+      
+      if (!exists) {
+        debugPrint('Account does not exist, funding it first...');
+        final fundResult = await fundAccount(stellarPublicKey);
+        
+        if (!fundResult.success) {
+          return TransactionResult(
+            success: false,
+            error: 'Failed to fund account: ${fundResult.error}',
+          );
+        }
+        debugPrint('✅ Account funded!');
+        
+        // Wait a moment for the ledger to update
+        await Future.delayed(const Duration(seconds: 2));
+      }
+      
+      // Now check if trustline exists
       final hasTrustline = await hasGnsTrustline(stellarPublicKey);
       
       if (!hasTrustline) {
-        debugPrint('Creating trustline first...');
+        debugPrint('Creating trustline...');
         final trustResult = await createGnsTrustline(
           stellarPublicKey: stellarPublicKey,
           privateKeyBytes: privateKeyBytes,
@@ -355,7 +452,7 @@ class StellarService {
             error: 'Failed to create trustline: ${trustResult.error}',
           );
         }
-        debugPrint('Trustline created!');
+        debugPrint('✅ Trustline created!');
       }
       
       // Get claimable balances
@@ -399,6 +496,7 @@ class StellarService {
   // ==================== SEND GNS ====================
   
   /// Send GNS tokens to another user
+  /// If recipient doesn't have a trustline, uses claimable balance instead
   Future<TransactionResult> sendGns({
     required String senderStellarPublicKey,
     required Uint8List senderPrivateKeyBytes,
@@ -428,12 +526,6 @@ class StellarService {
       
       // Check if recipient has trustline
       final recipientHasTrustline = await hasGnsTrustline(recipientStellarPublicKey);
-      if (!recipientHasTrustline) {
-        return TransactionResult(
-          success: false,
-          error: 'Recipient has not set up their GNS wallet yet.',
-        );
-      }
       
       // Create GNS asset
       final gnsAsset = Asset.createNonNativeAsset(
@@ -441,25 +533,47 @@ class StellarService {
         StellarConfig.gnsIssuerPublic,
       );
       
-      // Build payment transaction
-      final transaction = TransactionBuilder(account)
-          .addOperation(
-            PaymentOperationBuilder(
-              recipientStellarPublicKey,
-              gnsAsset,
-              amount.toStringAsFixed(7),
-            ).build(),
-          )
-          .build();
+      TransactionBuilder txBuilder;
+      String successMessage;
       
-      // Sign transaction
+      if (recipientHasTrustline) {
+        // ✅ Direct payment - recipient has trustline
+        txBuilder = TransactionBuilder(account)
+            .addOperation(
+              PaymentOperationBuilder(
+                recipientStellarPublicKey,
+                gnsAsset,
+                amount.toStringAsFixed(7),
+              ).build(),
+            );
+        successMessage = 'GNS sent!';
+      } else {
+        // ✅ Claimable balance - recipient doesn't have trustline yet
+        debugPrint('Recipient has no trustline, using claimable balance...');
+        
+        // Create claimant with unconditional predicate (can claim anytime)
+        final claimant = Claimant(recipientStellarPublicKey, Claimant.predicateUnconditional());
+        
+        txBuilder = TransactionBuilder(account)
+            .addOperation(
+              CreateClaimableBalanceOperationBuilder(
+                [claimant],
+                gnsAsset,
+                amount.toStringAsFixed(7),
+              ).build(),
+            );
+        successMessage = 'GNS sent as claimable balance! Recipient will receive when they set up their wallet.';
+      }
+      
+      // Build and sign transaction
+      final transaction = txBuilder.build();
       transaction.sign(keyPair, StellarConfig.network);
       
       // Submit transaction
       final response = await _sdk.submitTransaction(transaction);
       
       if (response.success) {
-        debugPrint('GNS sent! Hash: ${response.hash}');
+        debugPrint('$successMessage Hash: ${response.hash}');
         return TransactionResult(success: true, hash: response.hash);
       } else {
         final error = response.extras?.resultCodes?.operationsResultCodes?.join(', ') ?? 'Unknown error';

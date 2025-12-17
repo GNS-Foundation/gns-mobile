@@ -1,6 +1,7 @@
-/// Handle Management Screen - Phase 6
+/// Handle Management Screen - Phase 6 (v2)
 /// 
 /// Shows handle status, progress toward claiming, and claim button.
+/// v2: Fixed mainnet account funding before trustline creation
 /// 
 /// Location: lib/ui/screens/handle_management_screen.dart
 
@@ -10,6 +11,7 @@ import 'package:flutter/services.dart';
 import '../../core/gns/identity_wallet.dart';
 import '../../core/chain/breadcrumb_engine.dart';
 import '../../core/theme/theme_service.dart';
+import '../financial/stellar_service.dart';
 
 class HandleManagementScreen extends StatefulWidget {
   final IdentityWallet wallet;
@@ -71,21 +73,97 @@ class _HandleManagementScreenState extends State<HandleManagementScreen> {
     
     final result = await widget.wallet.claimHandle();
     
-    setState(() => _claiming = false);
-    
     if (mounted) {
       if (result.success) {
+        // ✅ Set up Stellar wallet on successful claim!
+        String walletStatus = '';
+        try {
+          final stellarService = StellarService();
+          final publicKey = widget.wallet.publicKey;
+          final privateKeyBytes = widget.wallet.privateKeyBytes;
+          
+          if (publicKey != null && privateKeyBytes != null) {
+            final stellarPublicKey = stellarService.gnsKeyToStellar(publicKey);
+            debugPrint('🚀 Setting up Stellar wallet: $stellarPublicKey');
+            
+            // ==================== STEP 1: Check if account exists ====================
+            final exists = await stellarService.accountExists(stellarPublicKey);
+            debugPrint('   Account exists: $exists');
+            
+            if (!exists) {
+              // ==================== STEP 2: Fund the account ====================
+              debugPrint('💰 Funding Stellar account...');
+              
+              final fundResult = await stellarService.fundAccount(stellarPublicKey);
+              
+              if (fundResult.success) {
+                debugPrint('✅ Account funded! Hash: ${fundResult.hash}');
+                
+                // Wait for ledger to update
+                await Future.delayed(const Duration(seconds: 3));
+              } else {
+                debugPrint('❌ Failed to fund account: ${fundResult.error}');
+                walletStatus = ' (Wallet funding failed - contact support)';
+                
+                // Still continue to show success for handle claim
+                setState(() => _claiming = false);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${result.message ?? '@${result.handle} is yours!'}$walletStatus'),
+                    backgroundColor: Colors.orange,
+                    duration: const Duration(seconds: 4),
+                  ),
+                );
+                await _loadInfo();
+                return;
+              }
+            }
+            
+            // ==================== STEP 3: Create GNS trustline ====================
+            final hasTrustline = await stellarService.hasGnsTrustline(stellarPublicKey);
+            debugPrint('   Has GNS trustline: $hasTrustline');
+            
+            if (!hasTrustline) {
+              debugPrint('📝 Creating GNS trustline...');
+              final trustResult = await stellarService.createGnsTrustline(
+                stellarPublicKey: stellarPublicKey,
+                privateKeyBytes: privateKeyBytes,
+              );
+              
+              if (trustResult.success) {
+                debugPrint('✅ GNS trustline created! Hash: ${trustResult.hash}');
+                walletStatus = ' GNS wallet ready!';
+              } else {
+                debugPrint('❌ Trustline error: ${trustResult.error}');
+                walletStatus = ' (Trustline pending)';
+              }
+            } else {
+              walletStatus = ' GNS wallet ready!';
+            }
+          }
+        } catch (e) {
+          debugPrint('❌ Stellar wallet setup error: $e');
+          walletStatus = ' (Wallet setup error)';
+          // Don't fail the claim if Stellar setup fails
+        }
+        
+        setState(() => _claiming = false);
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(result.message ?? '@${result.handle} is yours!'),
+            content: Text('${result.message ?? '@${result.handle} is yours!'}$walletStatus'),
             backgroundColor: Colors.green,
+            duration: const Duration(seconds: 4),
           ),
         );
         await _loadInfo();
       } else {
+        setState(() => _claiming = false);
         // Show requirements dialog
         _showRequirementsDialog(result);
       }
+    } else {
+      setState(() => _claiming = false);
     }
   }
   
@@ -223,22 +301,20 @@ class _HandleManagementScreenState extends State<HandleManagementScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        hasClaimed ? 'Handle Claimed' : (hasReserved ? 'Handle Reserved' : 'No Handle'),
+                        hasClaimed
+                            ? '@${info.claimedHandle}'
+                            : (hasReserved ? '@${info.reservedHandle}' : 'No Handle'),
                         style: const TextStyle(
+                          fontSize: 24,
                           fontWeight: FontWeight.bold,
-                          fontSize: 18,
                         ),
                       ),
-                      const SizedBox(height: 4),
                       Text(
                         hasClaimed
-                            ? '@${info.claimedHandle} is permanently yours!'
-                            : (hasReserved
-                                ? '@${info.reservedHandle} is reserved. Collect breadcrumbs to claim!'
-                                : 'Reserve a handle from the home screen'),
+                            ? 'Claimed & Verified'
+                            : (hasReserved ? 'Reserved - Collecting breadcrumbs' : 'Reserve a handle to get started'),
                         style: TextStyle(
                           color: AppTheme.textSecondary(context),
-                          fontSize: 14,
                         ),
                       ),
                     ],
@@ -246,29 +322,6 @@ class _HandleManagementScreenState extends State<HandleManagementScreen> {
                 ),
               ],
             ),
-            
-            if (hasReserved || hasClaimed) ...[
-              const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '@${hasClaimed ? info.claimedHandle : info.reservedHandle}',
-                    style: const TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.primary,
-                    ),
-                  ),
-                  if (hasClaimed) ...[
-                    const SizedBox(width: 8),
-                    const Icon(Icons.verified, color: Colors.green, size: 28),
-                  ],
-                ],
-              ),
-            ],
           ],
         ),
       ),
@@ -276,10 +329,6 @@ class _HandleManagementScreenState extends State<HandleManagementScreen> {
   }
   
   Widget _buildProgressCard(IdentityInfo info) {
-    final breadcrumbProgress = info.breadcrumbCount / requiredBreadcrumbs;
-    final trustProgress = info.trustScore / requiredTrust;
-    final overallProgress = (breadcrumbProgress.clamp(0.0, 1.0) + trustProgress.clamp(0.0, 1.0)) / 2;
-    
     return Card(
       color: AppTheme.surface(context),
       child: Padding(
@@ -288,7 +337,7 @@ class _HandleManagementScreenState extends State<HandleManagementScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'CLAIM PROGRESS',
+              'CLAIM REQUIREMENTS',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 letterSpacing: 1,
@@ -297,47 +346,27 @@ class _HandleManagementScreenState extends State<HandleManagementScreen> {
             ),
             const SizedBox(height: 16),
             
-            // Overall progress circle
-            Center(
-              child: SizedBox(
-                width: 120,
-                height: 120,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    SizedBox(
-                      width: 120,
-                      height: 120,
-                      child: CircularProgressIndicator(
-                        value: overallProgress,
-                        strokeWidth: 10,
-                        backgroundColor: Colors.grey.withOpacity(0.2),
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          overallProgress >= 1.0 ? Colors.green : AppTheme.primary,
-                        ),
+            // Hint text
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Collect breadcrumbs by moving around with the app open.',
+                      style: TextStyle(
+                        color: AppTheme.textSecondary(context),
+                        fontSize: 13,
                       ),
                     ),
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          '${(overallProgress * 100).toInt()}%',
-                          style: const TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          overallProgress >= 1.0 ? 'Ready!' : 'Progress',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppTheme.textSecondary(context),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
             

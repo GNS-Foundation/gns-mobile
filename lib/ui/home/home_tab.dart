@@ -18,7 +18,7 @@ import '../../core/profile/profile_facet.dart';
 import '../../core/financial/payment_service.dart';
 import '../../core/financial/transaction_storage.dart';
 import '../../core/theme/theme_service.dart';
-import '../../services/stellar_service.dart';
+import '../financial/stellar_service.dart';
 import '../widgets/identity_card.dart';
 import '../widgets/gns_search_bar.dart';
 import '../widgets/share_facet_picker.dart';
@@ -69,7 +69,11 @@ class _HomeTabState extends State<HomeTab> {
   void initState() {
     super.initState();
     _loadData();
-    widget.wallet.breadcrumbEngine.onBreadcrumbDropped = (_) => _loadData();
+    // Refresh UI when breadcrumb is dropped (with small delay for storage sync)
+    widget.wallet.breadcrumbEngine.onBreadcrumbDropped = (_) async {
+      await Future.delayed(const Duration(milliseconds: 100));
+      _loadData();
+    };
   }
 
   Future<void> _loadData() async {
@@ -334,7 +338,7 @@ class _HomeTabState extends State<HomeTab> {
                   ],
                 ),
                 
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
                 
                 Text(
                   'Tap to view wallet',
@@ -684,7 +688,7 @@ class _HomeTabState extends State<HomeTab> {
                         widget.wallet.stopBreadcrumbCollection();
                       } else {
                         await widget.wallet.startBreadcrumbCollection(
-                          interval: const Duration(minutes: 10),
+                          interval: const Duration(seconds: 30),  // TESTING: 30 sec
                         );
                       }
                       setState(() {});

@@ -227,11 +227,13 @@ class ThreadWithPreview {
   final GnsThread thread;
   final GnsMessage? lastMessage;
   final String? otherParticipantHandle;
+  final String? avatarUrl; 
 
   ThreadWithPreview({
     required this.thread,
     this.lastMessage,
     this.otherParticipantHandle,
+    this.avatarUrl,
   });
 }
 
@@ -464,6 +466,7 @@ class MessageStorage {
       results.add(ThreadWithPreview(
         thread: thread,
         lastMessage: lastMessage,
+        avatarUrl: thread.avatarUrl,  // ✅ NEW: Pass avatar from thread
       ));
     }
     
@@ -475,11 +478,54 @@ class MessageStorage {
     required String myPublicKey,
     required String otherPublicKey,
     String? otherHandle,
+    String? otherAvatarUrl,  // ✅ NEW: Avatar URL
   }) async {
     final threadId = GnsThread.directThreadId(myPublicKey, otherPublicKey);
     
     var thread = await getThread(threadId);
-    if (thread != null) return thread;
+    if (thread != null) {
+      // ✅ FIX: Update title and avatar if available but wasn't before
+      final updates = <String, dynamic>{};
+      
+      if (otherHandle != null && 
+          otherHandle.isNotEmpty && 
+          (thread.title == null || thread.title!.isEmpty)) {
+        updates['title'] = otherHandle;
+      }
+      
+      if (otherAvatarUrl != null && 
+          otherAvatarUrl.isNotEmpty && 
+          (thread.avatarUrl == null || thread.avatarUrl!.isEmpty)) {
+        updates['avatar_url'] = otherAvatarUrl;
+      }
+      
+      if (updates.isNotEmpty) {
+        await _db!.update(
+          'threads',
+          updates,
+          where: 'id = ?',
+          whereArgs: [threadId],
+        );
+        debugPrint('📝 Updated thread: title=$otherHandle, avatar=${otherAvatarUrl != null}');
+        // Return updated thread
+        return GnsThread(
+          id: thread.id,
+          type: thread.type,
+          participantKeys: thread.participantKeys,
+          title: updates['title'] as String? ?? thread.title,
+          avatarUrl: updates['avatar_url'] as String? ?? thread.avatarUrl,
+          createdAt: thread.createdAt,
+          lastActivityAt: thread.lastActivityAt,
+          unreadCount: thread.unreadCount,
+          isPinned: thread.isPinned,
+          isMuted: thread.isMuted,
+          isArchived: thread.isArchived,
+          draftText: thread.draftText,
+          metadata: thread.metadata,
+        );
+      }
+      return thread;
+    }
     
     // Create new thread
     thread = GnsThread(
@@ -487,6 +533,7 @@ class MessageStorage {
       type: 'direct',
       participantKeys: [myPublicKey, otherPublicKey],
       title: otherHandle,
+      avatarUrl: otherAvatarUrl,  // ✅ NEW: Save avatar
       createdAt: DateTime.now(),
       lastActivityAt: DateTime.now(),
     );

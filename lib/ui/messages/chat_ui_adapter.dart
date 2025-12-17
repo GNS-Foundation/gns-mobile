@@ -1,6 +1,6 @@
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import '../../core/comm/gns_envelope.dart';
-import '../../core/comm/message_storage.dart';  // ✅ ADDED - for GnsMessage
+import '../../core/comm/message_storage.dart'; 
 import '../../core/comm/communication_service.dart';
 
 class ChatUIAdapter {
