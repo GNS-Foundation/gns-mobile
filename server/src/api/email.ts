@@ -124,29 +124,31 @@ function encryptForRecipient(
 }
 
 /**
- * Create canonical JSON string for signing
+ * Create canonical JSON string for signing (ALPHABETICAL ORDER - must match Flutter!)
  */
 function createCanonicalEnvelopeString(envelope: EnvelopeData): string {
-  const ordered = {
-    id: envelope.id,
-    version: envelope.version,
-    fromPublicKey: envelope.fromPublicKey,
-    toPublicKeys: envelope.toPublicKeys,
-    ccPublicKeys: envelope.ccPublicKeys,
-    payloadType: envelope.payloadType,
-    encryptedPayload: envelope.encryptedPayload,
-    payloadSize: envelope.payloadSize,
-    threadId: envelope.threadId,
-    replyToId: envelope.replyToId,
-    forwardOfId: envelope.forwardOfId,
-    timestamp: envelope.timestamp,
-    expiresAt: envelope.expiresAt,
-    ephemeralPublicKey: envelope.ephemeralPublicKey,
-    recipientKeys: envelope.recipientKeys,
-    nonce: envelope.nonce,
-    priority: envelope.priority,
-  };
-  return JSON.stringify(ordered);
+  // CRITICAL: Fields MUST be in alphabetical order to match Flutter's verification
+  const canonical: Record<string, any> = {};
+  
+  if (envelope.ccPublicKeys != null) canonical.ccPublicKeys = envelope.ccPublicKeys;
+  canonical.encryptedPayload = envelope.encryptedPayload;
+  canonical.ephemeralPublicKey = envelope.ephemeralPublicKey;
+  if (envelope.expiresAt != null) canonical.expiresAt = envelope.expiresAt;
+  if (envelope.forwardOfId != null) canonical.forwardOfId = envelope.forwardOfId;
+  canonical.fromPublicKey = envelope.fromPublicKey;
+  canonical.id = envelope.id;
+  canonical.nonce = envelope.nonce;
+  canonical.payloadSize = envelope.payloadSize;
+  canonical.payloadType = envelope.payloadType;
+  canonical.priority = envelope.priority;
+  if (envelope.recipientKeys != null) canonical.recipientKeys = envelope.recipientKeys;
+  if (envelope.replyToId != null) canonical.replyToId = envelope.replyToId;
+  if (envelope.threadId != null) canonical.threadId = envelope.threadId;
+  canonical.timestamp = envelope.timestamp;
+  canonical.toPublicKeys = envelope.toPublicKeys;
+  canonical.version = envelope.version;
+  
+  return JSON.stringify(canonical);
 }
 
 // ===========================================
@@ -206,6 +208,7 @@ interface EnvelopeData {
   recipientKeys: any | null;
   nonce: string;
   priority: number;
+  signature?: string;  // ← ADDED: signature field
 }
 
 // ===========================================
@@ -274,17 +277,16 @@ export function getEmailGatewayStatus() {
     enabled: EMAIL_CONFIG.enabled,
     publicKey: gatewayEd25519PublicKeyHex,
     encryptionKey: gatewayX25519PublicKeyHex,
-    handle: `@${EMAIL_CONFIG.handle}`,
     domain: EMAIL_CONFIG.domain,
   };
 }
 
 // ===========================================
-// WEBHOOK VERIFICATION
+// WEBHOOK SECRET VERIFICATION
 // ===========================================
 
 function verifyWebhookSecret(req: Request, res: Response, next: Function) {
-  const secret = req.headers['x-webhook-secret'] as string;
+  const secret = req.headers['x-webhook-secret'] || req.query.secret;
   
   if (secret !== EMAIL_CONFIG.webhookSecret) {
     console.error('❌ Invalid webhook secret');
@@ -397,7 +399,7 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
     const recipientX25519 = toBytes(record.encryption_key);
     const encrypted = encryptForRecipient(payloadBuffer, recipientX25519);
     
-    // 6. Create GNS Envelope
+    // 6. Create GNS Envelope (WITHOUT signature initially)
     const envelopeId = generateUUID();
     const timestamp = Date.now();
     
@@ -428,25 +430,31 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
       priority: 1,
     };
     
-    // 7. Sign envelope
+    // 7. Sign envelope and ADD SIGNATURE TO ENVELOPE
     const dataToSign = createCanonicalEnvelopeString(envelope);
-    const signature = nacl.sign.detached(
+    const signatureBytes = nacl.sign.detached(
       Buffer.from(dataToSign, 'utf8'),
       gatewayKeypair!.secretKey
     );
+    const signatureHex = toHex(signatureBytes);
     
-    // 8. Store message
+    // ✅ ADD SIGNATURE TO ENVELOPE!
+    envelope.signature = signatureHex;
+    
+    console.log(`   🔐 Signed envelope (sig: ${signatureHex.substring(0, 16)}...)`);
+    
+    // 8. Store message (now includes signature)
     const message = await db.createEnvelopeMessage(
       gatewayEd25519PublicKeyHex,
       alias.pk_root,
-      envelope,
+      envelope,  // ← Now includes signature!
       threadId
     );
     
-    // 9. Notify via WebSocket
+    // 9. Notify via WebSocket (envelope now includes signature)
     notifyRecipients([alias.pk_root], {
       type: 'message',
-      envelope: envelope,
+      envelope: envelope,  // ← Now includes signature!
     });
     
     console.log(`   ✅ Email delivered as GNS envelope: ${envelopeId.substring(0, 8)}...`);
