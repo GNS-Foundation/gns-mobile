@@ -431,9 +431,13 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
     };
     
     // 7. Sign envelope and ADD SIGNATURE TO ENVELOPE
+    // ✅ CRITICAL FIX: Hash first, then sign (matching Flutter verification)
     const dataToSign = createCanonicalEnvelopeString(envelope);
+    const hash = crypto.createHash('sha256').update(dataToSign, 'utf8').digest();
+    console.log(`   📋 Canonical (first 100): ${dataToSign.substring(0, 100)}...`);
+    console.log(`   🔢 Hash (first 16 bytes): ${hash.slice(0, 16).toString('hex')}...`);
     const signatureBytes = nacl.sign.detached(
-      Buffer.from(dataToSign, 'utf8'),
+      hash,  // ✅ Sign the HASH, not raw data
       gatewayKeypair!.secretKey
     );
     const signatureHex = toHex(signatureBytes);
