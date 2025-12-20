@@ -118,7 +118,7 @@ function encryptForRecipient(
   
   return {
     encryptedPayload: encrypted.toString('base64'),
-    ephemeralPublicKey: toHex(ephemeralKeypair.publicKey),
+    ephemeralPublicKey: Buffer.from(ephemeralKeypair.publicKey).toString('base64'),  // ✅ BASE64
     nonce: nonce.toString('base64'),
   };
 }
