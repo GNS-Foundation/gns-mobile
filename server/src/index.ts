@@ -22,6 +22,7 @@ import paymentsRouter from './api/payments';
 import geoauthRouter from './api/geoauth';
 import webRouter from './api/web'; 
 import dixRouter from './api/dix';
+import emailRouter, { initializeEmailGateway } from './api/email';  // 📧 NEW
 
 // Services
 import echoBot from './services/echo_bot';
@@ -60,7 +61,8 @@ app.use(cors({
     'X-GNS-Identity', 
     'X-GNS-PublicKey',
     'X-GNS-Signature', 
-    'X-GNS-Timestamp'
+    'X-GNS-Timestamp',
+    'X-Webhook-Secret',  // 📧 NEW - for email webhook
   ],
 }));
 
@@ -82,14 +84,14 @@ app.get('/', async (req: Request, res: Response) => {
   
   res.json({
     name: 'GNS Node',
-    version: '1.2.0',
+    version: '1.3.0',  // 📧 Version bump
     node_id: NODE_ID,
     status: dbHealthy ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
     features: {
       websocket: true,
       envelope_messaging: true,
-      // ✅ FIX: Use the exported function name
+      email_gateway: true,  // 📧 NEW
       echo_bot: echoBot.getEchoBotStatus().running,
     },
     endpoints: {
@@ -101,9 +103,9 @@ app.get('/', async (req: Request, res: Response) => {
       messages: '/messages',
       messages_ws: '/ws',
       sync: '/sync',
+      email: '/email/inbound',  // 📧 NEW
     },
     system_handles: {
-      // ✅ FIX: Use the exported function name
       echo: `@echo (${echoBot.getEchoPublicKey().substring(0, 16)}...)`,
     },
   });
@@ -125,7 +127,6 @@ app.get('/health', async (req: Request, res: Response) => {
     node_id: NODE_ID,
     websocket: true,
     bots: {
-      // ✅ FIX: Use the exported function name
       echo: echoBot.getEchoBotStatus(),
     },
   });
@@ -148,6 +149,7 @@ app.use('/web', webRouter);
 app.use('/search', webRouter);  // For /search endpoint
 app.use('/stats', webRouter);   // For /stats endpoint
 app.use('/web/dix', dixRouter);
+app.use('/email', emailRouter);  // 📧 NEW - Email Gateway
 
 // ===========================================
 // Auth Challenge Endpoint
@@ -216,7 +218,7 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 });
 
 // ===========================================
-// Start Server (WITH WEBSOCKET + @echo BOT)
+// Start Server (WITH WEBSOCKET + @echo BOT + EMAIL)
 // ===========================================
 
 async function start() {
@@ -245,7 +247,6 @@ async function start() {
   // ===========================================
   // INITIALIZE @echo BOT
   // ===========================================
-  // 🟢 FIX 2d: Use initializeEchoBot
   await echoBot.initializeEchoBot();
   
   // Register @echo handle in database (optional, non-fatal if fails)
@@ -256,9 +257,18 @@ async function start() {
   }
   
   // Start the bot (begins polling for messages)
-  // 🟢 FIX 2e: Use startPolling
   echoBot.startPolling();
   console.log('✅ @echo bot started');
+  
+  // ===========================================
+  // INITIALIZE EMAIL GATEWAY  📧 NEW
+  // ===========================================
+  try {
+    await initializeEmailGateway();
+    console.log('✅ Email gateway initialized');
+  } catch (e) {
+    console.warn('⚠️ Email gateway initialization failed (non-fatal):', e);
+  }
   
   // ===========================================
   // START LISTENING
@@ -267,8 +277,8 @@ async function start() {
     console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║   🌐 GNS NODE v1.2                                        ║
-║   Identity through Presence — Now with @echo Bot          ║
+║   🌐 GNS NODE v1.3                                        ║
+║   Identity through Presence — Now with Email Gateway      ║
 ║                                                           ║
 ╠═══════════════════════════════════════════════════════════╣
 ║                                                           ║
@@ -285,9 +295,11 @@ async function start() {
 ║   ✅ WebSocket Real-time                                  ║
 ║   ✅ Typing Indicators                                    ║
 ║   ✅ Presence Status                                      ║
+║   ✅ Email Gateway (9lobe.com)                            ║
 ║                                                           ║
 ║   System Handles:                                         ║
 ║   🤖 @echo - Test bot (echoes messages back)              ║
+║   📧 @email-gateway - Inbound email bridge                ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
     `);
@@ -297,14 +309,12 @@ async function start() {
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down...');
-  // 🟢 FIX 2f: Use stopPolling
   echoBot.stopPolling();
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down...');
-  // 🟢 FIX 2g: Use stopPolling
   echoBot.stopPolling();
   process.exit(0);
 });
