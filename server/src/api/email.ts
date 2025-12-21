@@ -101,6 +101,11 @@ function encryptForRecipient(
   // X25519 shared secret
   const sharedSecret = nacl.box.before(recipientX25519PublicKey, ephemeralKeypair.secretKey);
   
+  // DEBUG: Log keys for troubleshooting
+  console.log(`   🔑 Recipient X25519: ${toHex(recipientX25519PublicKey).substring(0, 16)}...`);
+  console.log(`   🔑 Ephemeral public: ${toHex(ephemeralKeypair.publicKey).substring(0, 16)}...`);
+  console.log(`   🔑 Shared secret: ${toHex(sharedSecret).substring(0, 16)}...`);
+  
   // Derive encryption key via HKDF
   const derivedKey = hkdfDerive(sharedSecret, HKDF_INFO_ENVELOPE);
   
