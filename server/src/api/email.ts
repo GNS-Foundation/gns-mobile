@@ -314,15 +314,44 @@ function parseEmailBody(rawBase64: string): { text: string; html?: string } {
   try {
     const raw = Buffer.from(rawBase64, 'base64').toString('utf-8');
     
-    const parts = raw.split('\r\n\r\n');
-    if (parts.length > 1) {
-      const body = parts.slice(1).join('\r\n\r\n');
+    // Check if it's multipart
+    const boundaryMatch = raw.match(/boundary="?([^"\r\n]+)"?/i);
+    
+    if (boundaryMatch) {
+      const boundary = boundaryMatch[1];
+      const parts = raw.split(`--${boundary}`);
       
-      if (raw.includes('Content-Type: text/html')) {
-        return { text: body, html: body };
+      let textBody = '';
+      let htmlBody = '';
+      
+      for (const part of parts) {
+        if (part.includes('Content-Type: text/plain')) {
+          // Extract text after the headers (double newline)
+          const bodyStart = part.indexOf('\r\n\r\n');
+          if (bodyStart !== -1) {
+            textBody = part.substring(bodyStart + 4).trim();
+            // Remove trailing boundary marker
+            textBody = textBody.replace(/--$/, '').trim();
+          }
+        } else if (part.includes('Content-Type: text/html')) {
+          const bodyStart = part.indexOf('\r\n\r\n');
+          if (bodyStart !== -1) {
+            htmlBody = part.substring(bodyStart + 4).trim();
+            htmlBody = htmlBody.replace(/--$/, '').trim();
+          }
+        }
       }
       
-      return { text: body };
+      return { 
+        text: textBody || htmlBody || '[No content]', 
+        html: htmlBody || undefined 
+      };
+    }
+    
+    // Not multipart - simple body extraction
+    const parts = raw.split('\r\n\r\n');
+    if (parts.length > 1) {
+      return { text: parts.slice(1).join('\r\n\r\n') };
     }
     
     return { text: raw };
