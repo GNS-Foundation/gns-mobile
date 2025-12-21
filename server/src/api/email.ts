@@ -1,7 +1,8 @@
 // ===========================================
 // GNS NODE - EMAIL GATEWAY SERVICE
 // Receives inbound emails from Cloudflare Worker
-// Routes to GNS users via encrypted envelopes
+// Sends outbound emails via SMTP
+// Routes GNS-to-GNS emails internally
 // ===========================================
 
 import { Router, Request, Response } from 'express';
@@ -11,6 +12,7 @@ import sodium from 'libsodium-wrappers';
 import * as db from '../lib/db';
 import { notifyRecipients } from './messages';
 import { ApiResponse } from '../types';
+import { createTransport, Transporter } from 'nodemailer';
 
 const router = Router();
 
@@ -31,6 +33,49 @@ const EMAIL_CONFIG: EmailGatewayConfig = {
   enabled: true,
   domain: 'gcrumbs.com',
 };
+
+// ===========================================
+// SMTP CONFIGURATION (OUTBOUND)
+// ===========================================
+
+const SMTP_CONFIG = {
+  host: process.env.SMTP_HOST || 'smtp.mailgun.org',
+  port: parseInt(process.env.SMTP_PORT || '587'),
+  user: process.env.SMTP_USER || '',
+  pass: process.env.SMTP_PASS || '',
+};
+
+let smtpTransporter: Transporter | null = null;
+
+function getSmtpTransporter(): Transporter | null {
+  if (!SMTP_CONFIG.user || !SMTP_CONFIG.pass) {
+    return null;
+  }
+  
+  if (!smtpTransporter) {
+    smtpTransporter = createTransport({
+      host: SMTP_CONFIG.host,
+      port: SMTP_CONFIG.port,
+      secure: SMTP_CONFIG.port === 465,
+      auth: {
+        user: SMTP_CONFIG.user,
+        pass: SMTP_CONFIG.pass,
+      },
+    });
+    
+    // Verify connection
+    smtpTransporter.verify((error) => {
+      if (error) {
+        console.error('❌ SMTP connection error:', error);
+        smtpTransporter = null;
+      } else {
+        console.log('✅ SMTP server ready for outbound email');
+      }
+    });
+  }
+  
+  return smtpTransporter;
+}
 
 // ===========================================
 // CRYPTO CONSTANTS (match Flutter)
@@ -75,16 +120,13 @@ function generateUUID(): string {
  * HKDF key derivation
  */
 function hkdfDerive(sharedSecret: Uint8Array, info: string): Uint8Array {
-  // Use Node.js native HKDF (RFC 5869 compliant)
-  // This matches Flutter's cryptography package HKDF
   const derivedKey = crypto.hkdfSync(
-    'sha256',                           // Hash algorithm
-    Buffer.from(sharedSecret),          // Input key material (IKM)
-    Buffer.alloc(0),                    // Salt (empty = use zeros internally)
-    Buffer.from(info, 'utf8'),          // Info/context
-    KEY_LENGTH                          // Output key length (32 bytes)
+    'sha256',
+    Buffer.from(sharedSecret),
+    Buffer.alloc(0),
+    Buffer.from(info, 'utf8'),
+    KEY_LENGTH
   );
-
   return new Uint8Array(derivedKey);
 }
 
@@ -125,7 +167,7 @@ function encryptForRecipient(
 
   return {
     encryptedPayload: encrypted.toString('base64'),
-    ephemeralPublicKey: Buffer.from(ephemeralKeypair.publicKey).toString('base64'),  // ✅ BASE64
+    ephemeralPublicKey: Buffer.from(ephemeralKeypair.publicKey).toString('base64'),
     nonce: nonce.toString('base64'),
   };
 }
@@ -134,7 +176,6 @@ function encryptForRecipient(
  * Create canonical JSON string for signing (ALPHABETICAL ORDER - must match Flutter!)
  */
 function createCanonicalEnvelopeString(envelope: EnvelopeData): string {
-  // CRITICAL: Fields MUST be in alphabetical order to match Flutter's verification
   const canonical: Record<string, any> = {};
 
   if (envelope.ccPublicKeys != null) canonical.ccPublicKeys = envelope.ccPublicKeys;
@@ -185,6 +226,7 @@ interface EmailPayload {
   body: string;
   bodyFormat: 'plain' | 'markdown' | 'html';
   from: string;
+  to?: string;
   messageId?: string;
   inReplyTo?: string;
   references?: string[];
@@ -215,7 +257,12 @@ interface EnvelopeData {
   recipientKeys: any | null;
   nonce: string;
   priority: number;
-  signature?: string;  // ← ADDED: signature field
+  signature?: string;
+}
+
+interface AuthenticatedRequest extends Request {
+  gnsPublicKey?: string;
+  gnsHandle?: string;
 }
 
 // ===========================================
@@ -269,6 +316,14 @@ export async function initializeEmailGateway(): Promise<{ publicKey: string; enc
   console.log(`   Ed25519 (identity): ${gatewayEd25519PublicKeyHex.substring(0, 16)}...`);
   console.log(`   X25519 (encryption): ${gatewayX25519PublicKeyHex.substring(0, 16)}...`);
   console.log(`   Domain: ${EMAIL_CONFIG.domain}`);
+  
+  // Check SMTP config
+  if (SMTP_CONFIG.user && SMTP_CONFIG.pass) {
+    console.log(`   SMTP: ${SMTP_CONFIG.host}:${SMTP_CONFIG.port} ✅`);
+    getSmtpTransporter(); // Initialize
+  } else {
+    console.log(`   SMTP: Not configured (outbound disabled)`);
+  }
 
   return {
     publicKey: gatewayEd25519PublicKeyHex,
@@ -289,7 +344,7 @@ export function getEmailGatewayStatus() {
 }
 
 // ===========================================
-// WEBHOOK SECRET VERIFICATION
+// MIDDLEWARE
 // ===========================================
 
 function verifyWebhookSecret(req: Request, res: Response, next: Function) {
@@ -306,13 +361,48 @@ function verifyWebhookSecret(req: Request, res: Response, next: Function) {
   next();
 }
 
+const verifyGnsAuth = async (
+  req: AuthenticatedRequest, 
+  res: Response, 
+  next: Function
+) => {
+  try {
+    const publicKey = (req.headers['x-gns-publickey'] as string)?.toLowerCase();
+    const timestamp = req.headers['x-gns-timestamp'] as string;
+    const signature = req.headers['x-gns-signature'] as string;
+
+    if (!publicKey || publicKey.length !== 64) {
+      return res.status(401).json({
+        success: false,
+        error: 'Missing or invalid X-GNS-PublicKey header',
+      } as ApiResponse);
+    }
+
+    // Look up handle for this public key
+    const alias = await db.getAliasByPk(publicKey);
+    if (!alias) {
+      return res.status(403).json({
+        success: false,
+        error: 'No handle claimed for this public key. Claim a handle first to send emails.',
+      } as ApiResponse);
+    }
+
+    req.gnsPublicKey = publicKey;
+    req.gnsHandle = alias.handle;
+    next();
+  } catch (error) {
+    console.error('Auth error:', error);
+    res.status(401).json({ success: false, error: 'Authentication failed' });
+  }
+};
+
 // ===========================================
 // PARSE EMAIL BODY FROM RAW MIME
 // ===========================================
 
 function decodeQuotedPrintable(str: string): string {
   return str
-    .replace(/=\r?\n/g, '')  // Remove soft line breaks
+    .replace(/=\r?\n/g, '')
     .replace(/=([0-9A-F]{2})/gi, (_, hex) =>
       String.fromCharCode(parseInt(hex, 16))
     );
@@ -322,7 +412,6 @@ function parseEmailBody(rawBase64: string): { text: string; html?: string } {
   try {
     const raw = Buffer.from(rawBase64, 'base64').toString('utf-8');
 
-    // Check if it's multipart
     const boundaryMatch = raw.match(/boundary="?([^"\r\n]+)"?/i);
 
     if (boundaryMatch) {
@@ -334,13 +423,10 @@ function parseEmailBody(rawBase64: string): { text: string; html?: string } {
 
       for (const part of parts) {
         if (part.includes('Content-Type: text/plain')) {
-          // Extract text after the headers (double newline)
           const bodyStart = part.indexOf('\r\n\r\n');
           if (bodyStart !== -1) {
             textBody = part.substring(bodyStart + 4).trim();
-            // Remove trailing boundary marker
             textBody = textBody.replace(/--$/, '').trim();
-            // Decode quoted-printable if needed
             if (part.includes('Content-Transfer-Encoding: quoted-printable')) {
               textBody = decodeQuotedPrintable(textBody);
             }
@@ -350,7 +436,6 @@ function parseEmailBody(rawBase64: string): { text: string; html?: string } {
           if (bodyStart !== -1) {
             htmlBody = part.substring(bodyStart + 4).trim();
             htmlBody = htmlBody.replace(/--$/, '').trim();
-            // Decode quoted-printable if needed
             if (part.includes('Content-Transfer-Encoding: quoted-printable')) {
               htmlBody = decodeQuotedPrintable(htmlBody);
             }
@@ -364,7 +449,6 @@ function parseEmailBody(rawBase64: string): { text: string; html?: string } {
       };
     }
 
-    // Not multipart - simple body extraction
     const parts = raw.split('\r\n\r\n');
     if (parts.length > 1) {
       return { text: parts.slice(1).join('\r\n\r\n') };
@@ -378,7 +462,7 @@ function parseEmailBody(rawBase64: string): { text: string; html?: string } {
 }
 
 // ===========================================
-// INBOUND EMAIL ENDPOINT
+// POST /email/inbound - RECEIVE FROM CLOUDFLARE
 // ===========================================
 
 router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response) => {
@@ -441,6 +525,7 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
       body: textBody || htmlBody || '[No content]',
       bodyFormat: htmlBody ? 'html' : 'plain',
       from: webhook.from,
+      to: webhook.to,
       messageId: webhook.headers?.messageId,
       receivedAt: webhook.receivedAt,
     };
@@ -451,11 +536,10 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
     const recipientX25519 = toBytes(record.encryption_key);
     const encrypted = encryptForRecipient(payloadBuffer, recipientX25519);
 
-    // 6. Create GNS Envelope (WITHOUT signature initially)
+    // 6. Create GNS Envelope
     const envelopeId = generateUUID();
     const timestamp = Date.now();
 
-    // Generate thread ID from external sender + recipient for grouping
     const threadId = crypto
       .createHash('sha256')
       .update(`${webhook.from}:${alias.pk_root}`)
@@ -482,35 +566,30 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
       priority: 1,
     };
 
-    // 7. Sign envelope and ADD SIGNATURE TO ENVELOPE
-    // ✅ CRITICAL FIX: Hash first, then sign (matching Flutter verification)
+    // 7. Sign envelope
     const dataToSign = createCanonicalEnvelopeString(envelope);
     const hash = crypto.createHash('sha256').update(dataToSign, 'utf8').digest();
     console.log(`   📋 Canonical (first 100): ${dataToSign.substring(0, 100)}...`);
     console.log(`   🔢 Hash (first 16 bytes): ${hash.slice(0, 16).toString('hex')}...`);
-    const signatureBytes = nacl.sign.detached(
-      hash,  // ✅ Sign the HASH, not raw data
-      gatewayKeypair!.secretKey
-    );
+    const signatureBytes = nacl.sign.detached(hash, gatewayKeypair!.secretKey);
     const signatureHex = toHex(signatureBytes);
 
-    // ✅ ADD SIGNATURE TO ENVELOPE!
     envelope.signature = signatureHex;
 
     console.log(`   🔐 Signed envelope (sig: ${signatureHex.substring(0, 16)}...)`);
 
-    // 8. Store message (now includes signature)
+    // 8. Store message
     const message = await db.createEnvelopeMessage(
       gatewayEd25519PublicKeyHex,
       alias.pk_root,
-      envelope,  // ← Now includes signature!
+      envelope,
       threadId
     );
 
-    // 9. Notify via WebSocket (envelope now includes signature)
+    // 9. Notify via WebSocket
     notifyRecipients([alias.pk_root], {
       type: 'message',
-      envelope: envelope,  // ← Now includes signature!
+      envelope: envelope,
     });
 
     console.log(`   ✅ Email delivered as GNS envelope: ${envelopeId.substring(0, 8)}...`);
@@ -536,7 +615,249 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
 });
 
 // ===========================================
-// EMAIL STATUS ENDPOINTS
+// POST /email/send - SEND OUTBOUND EMAIL
+// ===========================================
+
+router.post('/send', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { to, subject, body, bodyFormat, inReplyTo, references } = req.body;
+    
+    // Validate required fields
+    if (!to || !body) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: to, body',
+      } as ApiResponse);
+    }
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(to)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid recipient email address',
+      } as ApiResponse);
+    }
+    
+    // Check if recipient is a GNS handle (internal routing)
+    const toMatch = to.match(/^([^@]+)@gcrumbs\.com$/i);
+    if (toMatch) {
+      // Internal GNS-to-GNS email
+      return await sendInternalEmail(req, res, toMatch[1], subject, body, bodyFormat);
+    }
+    
+    // External email - use SMTP
+    const smtp = getSmtpTransporter();
+    if (!smtp) {
+      return res.status(503).json({
+        success: false,
+        error: 'Outbound email service not configured. SMTP credentials required.',
+      } as ApiResponse);
+    }
+    
+    // Build from address
+    const fromEmail = `${req.gnsHandle}@${EMAIL_CONFIG.domain}`;
+    const fromAddress = `${req.gnsHandle} <${fromEmail}>`;
+    
+    // Build email headers
+    const headers: Record<string, string> = {
+      'X-GNS-PublicKey': req.gnsPublicKey!,
+      'X-GNS-Handle': `@${req.gnsHandle}`,
+      'X-Mailer': 'GNS Email Gateway',
+    };
+    
+    if (inReplyTo) {
+      headers['In-Reply-To'] = inReplyTo;
+    }
+    if (references && Array.isArray(references)) {
+      headers['References'] = references.join(' ');
+    }
+    
+    // Send email
+    const mailOptions = {
+      from: fromAddress,
+      to: to,
+      subject: subject || '(No subject)',
+      text: bodyFormat === 'html' ? undefined : body,
+      html: bodyFormat === 'html' ? body : undefined,
+      headers: headers,
+      replyTo: fromEmail,
+    };
+    
+    console.log(`📤 Sending outbound email:`);
+    console.log(`   From: ${fromEmail}`);
+    console.log(`   To: ${to}`);
+    console.log(`   Subject: ${subject}`);
+    
+    const result = await smtp.sendMail(mailOptions);
+    
+    console.log(`✅ Email sent: ${result.messageId}`);
+    
+    return res.json({
+      success: true,
+      data: {
+        messageId: result.messageId,
+        from: fromEmail,
+        to: to,
+        subject: subject || '(No subject)',
+        sentAt: new Date().toISOString(),
+      },
+      message: 'Email sent successfully',
+    } as ApiResponse);
+    
+  } catch (error: any) {
+    console.error('❌ POST /email/send error:', error);
+    
+    if (error.code === 'ECONNREFUSED') {
+      return res.status(503).json({
+        success: false,
+        error: 'Email server unavailable',
+      } as ApiResponse);
+    }
+    
+    if (error.responseCode === 550) {
+      return res.status(400).json({
+        success: false,
+        error: 'Recipient address rejected by mail server',
+      } as ApiResponse);
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to send email',
+    } as ApiResponse);
+  }
+});
+
+// ===========================================
+// INTERNAL GNS-TO-GNS EMAIL
+// ===========================================
+
+async function sendInternalEmail(
+  req: AuthenticatedRequest,
+  res: Response,
+  recipientHandle: string,
+  subject: string,
+  body: string,
+  bodyFormat?: string
+): Promise<Response> {
+  try {
+    const handle = recipientHandle.toLowerCase().replace(/^@/, '');
+    
+    // Look up recipient
+    const alias = await db.getAliasByHandle(handle);
+    if (!alias) {
+      return res.status(404).json({
+        success: false,
+        error: `Recipient @${handle} not found`,
+      } as ApiResponse);
+    }
+    
+    // Get recipient's encryption key
+    const record = await db.getRecord(alias.pk_root);
+    if (!record || !record.encryption_key) {
+      return res.status(400).json({
+        success: false,
+        error: 'Recipient has no encryption key configured',
+      } as ApiResponse);
+    }
+    
+    console.log(`📧 Internal GNS email: @${req.gnsHandle} → @${handle}`);
+    
+    // Create email payload
+    const emailPayload: EmailPayload = {
+      type: 'email',
+      subject: subject || '(No subject)',
+      body: body,
+      bodyFormat: (bodyFormat as 'plain' | 'html') || 'plain',
+      from: `${req.gnsHandle}@${EMAIL_CONFIG.domain}`,
+      to: `${handle}@${EMAIL_CONFIG.domain}`,
+      receivedAt: new Date().toISOString(),
+    };
+    
+    const payloadBuffer = Buffer.from(JSON.stringify(emailPayload), 'utf8');
+    
+    // Encrypt for recipient
+    const recipientX25519 = toBytes(record.encryption_key);
+    const encrypted = encryptForRecipient(payloadBuffer, recipientX25519);
+    
+    // Create envelope
+    const envelopeId = generateUUID();
+    const timestamp = Date.now();
+    
+    // Thread ID for GNS-to-GNS emails (different from external)
+    const threadId = crypto
+      .createHash('sha256')
+      .update(`gns-email:${req.gnsPublicKey}:${alias.pk_root}`)
+      .digest('hex')
+      .substring(0, 32);
+    
+    const envelope: EnvelopeData = {
+      id: envelopeId,
+      version: 1,
+      fromPublicKey: req.gnsPublicKey!,  // Sender's key, not gateway
+      toPublicKeys: [alias.pk_root],
+      ccPublicKeys: null,
+      payloadType: 'gns/email',
+      encryptedPayload: encrypted.encryptedPayload,
+      payloadSize: payloadBuffer.length,
+      threadId: threadId,
+      replyToId: null,
+      forwardOfId: null,
+      timestamp: timestamp,
+      expiresAt: null,
+      ephemeralPublicKey: encrypted.ephemeralPublicKey,
+      recipientKeys: null,
+      nonce: encrypted.nonce,
+      priority: 1,
+    };
+    
+    // Sign with gateway key for now (TODO: client-side signing)
+    const dataToSign = createCanonicalEnvelopeString(envelope);
+    const hash = crypto.createHash('sha256').update(dataToSign, 'utf8').digest();
+    const signatureBytes = nacl.sign.detached(hash, gatewayKeypair!.secretKey);
+    envelope.signature = toHex(signatureBytes);
+    
+    // Store message
+    await db.createEnvelopeMessage(
+      req.gnsPublicKey!,
+      alias.pk_root,
+      envelope,
+      threadId
+    );
+    
+    // Notify via WebSocket
+    notifyRecipients([alias.pk_root], {
+      type: 'message',
+      envelope: envelope,
+    });
+    
+    console.log(`✅ Internal email delivered: ${envelopeId.substring(0, 8)}...`);
+    
+    return res.json({
+      success: true,
+      data: {
+        messageId: envelopeId,
+        from: `${req.gnsHandle}@${EMAIL_CONFIG.domain}`,
+        to: `${handle}@${EMAIL_CONFIG.domain}`,
+        subject: subject || '(No subject)',
+        sentAt: new Date().toISOString(),
+        internal: true,
+      },
+      message: 'Email delivered internally via GNS',
+    } as ApiResponse);
+    
+  } catch (error) {
+    console.error('❌ Internal email error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to deliver internal email',
+    } as ApiResponse);
+  }
+}
+
+// ===========================================
+// STATUS ENDPOINTS
 // ===========================================
 
 router.post('/activate', async (req: Request, res: Response) => {
@@ -614,10 +935,50 @@ router.get('/status/:handle', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/address', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const emailAddress = `${req.gnsHandle}@${EMAIL_CONFIG.domain}`;
+    const smtp = getSmtpTransporter();
+    
+    return res.json({
+      success: true,
+      data: {
+        handle: req.gnsHandle,
+        email: emailAddress,
+        domain: EMAIL_CONFIG.domain,
+        publicKey: req.gnsPublicKey,
+        canSend: smtp !== null,
+        canReceive: true,
+      },
+    } as ApiResponse);
+    
+  } catch (error) {
+    console.error('GET /email/address error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    } as ApiResponse);
+  }
+});
+
 router.get('/gateway/status', (req: Request, res: Response) => {
+  const smtp = getSmtpTransporter();
+  
   return res.json({
     success: true,
-    data: getEmailGatewayStatus(),
+    data: {
+      ...getEmailGatewayStatus(),
+      smtp: {
+        configured: !!(SMTP_CONFIG.user && SMTP_CONFIG.pass),
+        ready: smtp !== null,
+        host: SMTP_CONFIG.host,
+      },
+      features: {
+        inbound: true,
+        outbound: smtp !== null,
+        internalRouting: true,
+      },
+    },
   } as ApiResponse);
 });
 
