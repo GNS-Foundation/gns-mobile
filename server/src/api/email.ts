@@ -99,7 +99,7 @@ function encryptForRecipient(
   const ephemeralKeypair = nacl.box.keyPair();
   
   // X25519 shared secret
-  const sharedSecret = nacl.box.before(recipientX25519PublicKey, ephemeralKeypair.secretKey);
+  const sharedSecret = nacl.scalarMult(ephemeralKeypair.secretKey, recipientX25519PublicKey);
   
   // DEBUG: Log keys for troubleshooting
   console.log(`   🔑 Recipient X25519: ${toHex(recipientX25519PublicKey).substring(0, 16)}...`);
