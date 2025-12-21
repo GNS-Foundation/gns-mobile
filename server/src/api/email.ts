@@ -75,15 +75,17 @@ function generateUUID(): string {
  * HKDF key derivation
  */
 function hkdfDerive(sharedSecret: Uint8Array, info: string): Uint8Array {
-  const hkdf = crypto.createHmac('sha256', Buffer.alloc(32, 0))
-    .update(sharedSecret)
-    .digest();
+  // Use Node.js native HKDF (RFC 5869 compliant)
+  // This matches Flutter's cryptography package HKDF
+  const derivedKey = crypto.hkdfSync(
+    'sha256',                           // Hash algorithm
+    Buffer.from(sharedSecret),          // Input key material (IKM)
+    Buffer.alloc(0),                    // Salt (empty = use zeros internally)
+    Buffer.from(info, 'utf8'),          // Info/context
+    KEY_LENGTH                          // Output key length (32 bytes)
+  );
   
-  const prk = crypto.createHmac('sha256', hkdf)
-    .update(Buffer.concat([Buffer.from(info), Buffer.from([1])]))
-    .digest();
-  
-  return new Uint8Array(prk.slice(0, KEY_LENGTH));
+  return new Uint8Array(derivedKey);
 }
 
 /**
