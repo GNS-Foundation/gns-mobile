@@ -29,7 +29,7 @@ const EMAIL_CONFIG: EmailGatewayConfig = {
   handle: 'email-gateway',
   webhookSecret: process.env.EMAIL_WEBHOOK_SECRET || 'gns-email-webhook-secret',
   enabled: true,
-  domain: '9lobe.com',
+  domain: 'gcrumbs.com',
 };
 
 // ===========================================
