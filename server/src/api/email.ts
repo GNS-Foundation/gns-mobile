@@ -84,7 +84,7 @@ function hkdfDerive(sharedSecret: Uint8Array, info: string): Uint8Array {
     Buffer.from(info, 'utf8'),          // Info/context
     KEY_LENGTH                          // Output key length (32 bytes)
   );
-  
+
   return new Uint8Array(derivedKey);
 }
 
@@ -97,32 +97,32 @@ function encryptForRecipient(
 ): { encryptedPayload: string; ephemeralPublicKey: string; nonce: string } {
   // Generate ephemeral X25519 keypair
   const ephemeralKeypair = nacl.box.keyPair();
-  
+
   // X25519 shared secret
   const sharedSecret = nacl.scalarMult(ephemeralKeypair.secretKey, recipientX25519PublicKey);
-  
+
   // DEBUG: Log keys for troubleshooting
   console.log(`   🔑 Recipient X25519: ${toHex(recipientX25519PublicKey).substring(0, 16)}...`);
   console.log(`   🔑 Ephemeral public: ${toHex(ephemeralKeypair.publicKey).substring(0, 16)}...`);
   console.log(`   🔑 Shared secret: ${toHex(sharedSecret).substring(0, 16)}...`);
-  
+
   // Derive encryption key via HKDF
   const derivedKey = hkdfDerive(sharedSecret, HKDF_INFO_ENVELOPE);
-  
+
   // Generate nonce
   const nonce = crypto.randomBytes(NONCE_LENGTH);
-  
+
   // Encrypt with ChaCha20-Poly1305
   const cipher = crypto.createCipheriv('chacha20-poly1305', derivedKey, nonce, {
     authTagLength: MAC_LENGTH,
   });
-  
+
   const encrypted = Buffer.concat([
     cipher.update(payload),
     cipher.final(),
     cipher.getAuthTag(),
   ]);
-  
+
   return {
     encryptedPayload: encrypted.toString('base64'),
     ephemeralPublicKey: Buffer.from(ephemeralKeypair.publicKey).toString('base64'),  // ✅ BASE64
@@ -136,7 +136,7 @@ function encryptForRecipient(
 function createCanonicalEnvelopeString(envelope: EnvelopeData): string {
   // CRITICAL: Fields MUST be in alphabetical order to match Flutter's verification
   const canonical: Record<string, any> = {};
-  
+
   if (envelope.ccPublicKeys != null) canonical.ccPublicKeys = envelope.ccPublicKeys;
   canonical.encryptedPayload = envelope.encryptedPayload;
   canonical.ephemeralPublicKey = envelope.ephemeralPublicKey;
@@ -154,7 +154,7 @@ function createCanonicalEnvelopeString(envelope: EnvelopeData): string {
   canonical.timestamp = envelope.timestamp;
   canonical.toPublicKeys = envelope.toPublicKeys;
   canonical.version = envelope.version;
-  
+
   return JSON.stringify(canonical);
 }
 
@@ -224,10 +224,10 @@ interface EnvelopeData {
 
 export async function initializeEmailGateway(): Promise<{ publicKey: string; encryptionKey: string }> {
   await sodium.ready;
-  
+
   const envPrivateKey = process.env.EMAIL_GATEWAY_PRIVATE_KEY;
   const envX25519PrivateKey = process.env.EMAIL_GATEWAY_X25519_PRIVATE_KEY;
-  
+
   if (envPrivateKey && envPrivateKey.length === 128) {
     const secretKey = toBytes(envPrivateKey);
     gatewayKeypair = {
@@ -236,7 +236,7 @@ export async function initializeEmailGateway(): Promise<{ publicKey: string; enc
     };
     gatewayEd25519PublicKeyHex = toHex(gatewayKeypair.publicKey);
     gatewayEd25519PrivateKeyHex = envPrivateKey;
-    
+
     if (envX25519PrivateKey && envX25519PrivateKey.length === 64) {
       gatewayX25519PrivateKey = toBytes(envX25519PrivateKey);
       const x25519Kp = nacl.box.keyPair.fromSecretKey(gatewayX25519PrivateKey);
@@ -245,31 +245,31 @@ export async function initializeEmailGateway(): Promise<{ publicKey: string; enc
       const x25519Kp = nacl.box.keyPair();
       gatewayX25519PrivateKey = x25519Kp.secretKey;
       gatewayX25519PublicKeyHex = toHex(x25519Kp.publicKey);
-      
+
       console.log(`   ⚠️  SAVE THIS TO RAILWAY ENV AS EMAIL_GATEWAY_X25519_PRIVATE_KEY:`);
       console.log(`   ${toHex(gatewayX25519PrivateKey)}`);
     }
-    
+
     console.log(`📧 Email Gateway initialized with existing keypair`);
   } else {
     gatewayKeypair = nacl.sign.keyPair();
     gatewayEd25519PublicKeyHex = toHex(gatewayKeypair.publicKey);
     gatewayEd25519PrivateKeyHex = toHex(gatewayKeypair.secretKey);
-    
+
     const x25519Kp = nacl.box.keyPair();
     gatewayX25519PrivateKey = x25519Kp.secretKey;
     gatewayX25519PublicKeyHex = toHex(x25519Kp.publicKey);
-    
+
     console.log(`📧 Email Gateway generated NEW dual keypair`);
     console.log(`   ⚠️  SAVE THESE TO RAILWAY ENV:`);
     console.log(`   EMAIL_GATEWAY_PRIVATE_KEY=${gatewayEd25519PrivateKeyHex}`);
     console.log(`   EMAIL_GATEWAY_X25519_PRIVATE_KEY=${toHex(gatewayX25519PrivateKey)}`);
   }
-  
+
   console.log(`   Ed25519 (identity): ${gatewayEd25519PublicKeyHex.substring(0, 16)}...`);
   console.log(`   X25519 (encryption): ${gatewayX25519PublicKeyHex.substring(0, 16)}...`);
   console.log(`   Domain: ${EMAIL_CONFIG.domain}`);
-  
+
   return {
     publicKey: gatewayEd25519PublicKeyHex,
     encryptionKey: gatewayX25519PublicKeyHex,
@@ -294,7 +294,7 @@ export function getEmailGatewayStatus() {
 
 function verifyWebhookSecret(req: Request, res: Response, next: Function) {
   const secret = req.headers['x-webhook-secret'] || req.query.secret;
-  
+
   if (secret !== EMAIL_CONFIG.webhookSecret) {
     console.error('❌ Invalid webhook secret');
     return res.status(401).json({
@@ -302,7 +302,7 @@ function verifyWebhookSecret(req: Request, res: Response, next: Function) {
       error: 'Invalid webhook secret',
     } as ApiResponse);
   }
-  
+
   next();
 }
 
@@ -310,20 +310,28 @@ function verifyWebhookSecret(req: Request, res: Response, next: Function) {
 // PARSE EMAIL BODY FROM RAW MIME
 // ===========================================
 
+function decodeQuotedPrintable(str: string): string {
+  return str
+    .replace(/=\r?\n/g, '')  // Remove soft line breaks
+    .replace(/=([0-9A-F]{2})/gi, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16))
+    );
+}
+
 function parseEmailBody(rawBase64: string): { text: string; html?: string } {
   try {
     const raw = Buffer.from(rawBase64, 'base64').toString('utf-8');
-    
+
     // Check if it's multipart
     const boundaryMatch = raw.match(/boundary="?([^"\r\n]+)"?/i);
-    
+
     if (boundaryMatch) {
       const boundary = boundaryMatch[1];
       const parts = raw.split(`--${boundary}`);
-      
+
       let textBody = '';
       let htmlBody = '';
-      
+
       for (const part of parts) {
         if (part.includes('Content-Type: text/plain')) {
           // Extract text after the headers (double newline)
@@ -332,28 +340,36 @@ function parseEmailBody(rawBase64: string): { text: string; html?: string } {
             textBody = part.substring(bodyStart + 4).trim();
             // Remove trailing boundary marker
             textBody = textBody.replace(/--$/, '').trim();
+            // Decode quoted-printable if needed
+            if (part.includes('Content-Transfer-Encoding: quoted-printable')) {
+              textBody = decodeQuotedPrintable(textBody);
+            }
           }
         } else if (part.includes('Content-Type: text/html')) {
           const bodyStart = part.indexOf('\r\n\r\n');
           if (bodyStart !== -1) {
             htmlBody = part.substring(bodyStart + 4).trim();
             htmlBody = htmlBody.replace(/--$/, '').trim();
+            // Decode quoted-printable if needed
+            if (part.includes('Content-Transfer-Encoding: quoted-printable')) {
+              htmlBody = decodeQuotedPrintable(htmlBody);
+            }
           }
         }
       }
-      
-      return { 
-        text: textBody || htmlBody || '[No content]', 
-        html: htmlBody || undefined 
+
+      return {
+        text: textBody || htmlBody || '[No content]',
+        html: htmlBody || undefined
       };
     }
-    
+
     // Not multipart - simple body extraction
     const parts = raw.split('\r\n\r\n');
     if (parts.length > 1) {
       return { text: parts.slice(1).join('\r\n\r\n') };
     }
-    
+
     return { text: raw };
   } catch (error) {
     console.error('Error parsing email body:', error);
@@ -368,17 +384,17 @@ function parseEmailBody(rawBase64: string): { text: string; html?: string } {
 router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response) => {
   try {
     const webhook: InboundEmailWebhook = req.body;
-    
+
     console.log(`📧 Inbound email received:`);
     console.log(`   To: ${webhook.to}`);
     console.log(`   Handle: ${webhook.handle}`);
     console.log(`   From: ${webhook.from}`);
     console.log(`   Subject: ${webhook.subject}`);
-    
+
     // 1. Resolve handle to GNS identity
     const handle = webhook.handle.toLowerCase().replace(/^@/, '');
     const alias = await db.getAliasByHandle(handle);
-    
+
     if (!alias) {
       console.error(`❌ Handle not found: @${handle}`);
       return res.status(404).json({
@@ -386,10 +402,10 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
         error: `Handle @${handle} not found`,
       } as ApiResponse);
     }
-    
+
     // 2. Get recipient's record with encryption key
     const record = await db.getRecord(alias.pk_root);
-    
+
     if (!record) {
       console.error(`❌ Record not found for: ${alias.pk_root}`);
       return res.status(404).json({
@@ -397,7 +413,7 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
         error: 'Recipient record not found',
       } as ApiResponse);
     }
-    
+
     if (!record.encryption_key) {
       console.error(`❌ No encryption key for: ${alias.pk_root}`);
       return res.status(400).json({
@@ -405,19 +421,19 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
         error: 'Recipient has no encryption key',
       } as ApiResponse);
     }
-    
+
     console.log(`   ✅ Resolved to: ${alias.pk_root.substring(0, 16)}...`);
-    
+
     // 3. Parse email body
     let textBody = webhook.textBody || '';
     let htmlBody = webhook.htmlBody;
-    
+
     if (!textBody && webhook.rawEmail) {
       const parsed = parseEmailBody(webhook.rawEmail);
       textBody = parsed.text;
       htmlBody = parsed.html;
     }
-    
+
     // 4. Create EmailPayload
     const emailPayload: EmailPayload = {
       type: 'email',
@@ -428,24 +444,24 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
       messageId: webhook.headers?.messageId,
       receivedAt: webhook.receivedAt,
     };
-    
+
     const payloadBuffer = Buffer.from(JSON.stringify(emailPayload), 'utf8');
-    
+
     // 5. Encrypt for recipient
     const recipientX25519 = toBytes(record.encryption_key);
     const encrypted = encryptForRecipient(payloadBuffer, recipientX25519);
-    
+
     // 6. Create GNS Envelope (WITHOUT signature initially)
     const envelopeId = generateUUID();
     const timestamp = Date.now();
-    
+
     // Generate thread ID from external sender + recipient for grouping
     const threadId = crypto
       .createHash('sha256')
       .update(`${webhook.from}:${alias.pk_root}`)
       .digest('hex')
       .substring(0, 32);
-    
+
     const envelope: EnvelopeData = {
       id: envelopeId,
       version: 1,
@@ -465,7 +481,7 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
       nonce: encrypted.nonce,
       priority: 1,
     };
-    
+
     // 7. Sign envelope and ADD SIGNATURE TO ENVELOPE
     // ✅ CRITICAL FIX: Hash first, then sign (matching Flutter verification)
     const dataToSign = createCanonicalEnvelopeString(envelope);
@@ -477,12 +493,12 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
       gatewayKeypair!.secretKey
     );
     const signatureHex = toHex(signatureBytes);
-    
+
     // ✅ ADD SIGNATURE TO ENVELOPE!
     envelope.signature = signatureHex;
-    
+
     console.log(`   🔐 Signed envelope (sig: ${signatureHex.substring(0, 16)}...)`);
-    
+
     // 8. Store message (now includes signature)
     const message = await db.createEnvelopeMessage(
       gatewayEd25519PublicKeyHex,
@@ -490,16 +506,16 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
       envelope,  // ← Now includes signature!
       threadId
     );
-    
+
     // 9. Notify via WebSocket (envelope now includes signature)
     notifyRecipients([alias.pk_root], {
       type: 'message',
       envelope: envelope,  // ← Now includes signature!
     });
-    
+
     console.log(`   ✅ Email delivered as GNS envelope: ${envelopeId.substring(0, 8)}...`);
     console.log(`   Thread: ${threadId.substring(0, 8)}...`);
-    
+
     return res.status(200).json({
       success: true,
       message: 'Email delivered',
@@ -509,7 +525,7 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
         recipientHandle: handle,
       },
     } as ApiResponse);
-    
+
   } catch (error) {
     console.error('❌ Inbound email error:', error);
     return res.status(500).json({
@@ -526,28 +542,28 @@ router.post('/inbound', verifyWebhookSecret, async (req: Request, res: Response)
 router.post('/activate', async (req: Request, res: Response) => {
   try {
     const { handle, publicKey } = req.body;
-    
+
     const normalizedHandle = handle.toLowerCase().replace(/^@/, '');
     const alias = await db.getAliasByHandle(normalizedHandle);
-    
+
     if (!alias) {
       return res.status(404).json({
         success: false,
         error: 'Handle not found',
       } as ApiResponse);
     }
-    
+
     if (alias.pk_root.toLowerCase() !== publicKey.toLowerCase()) {
       return res.status(403).json({
         success: false,
         error: 'Handle does not belong to this identity',
       } as ApiResponse);
     }
-    
+
     const emailAddress = `${normalizedHandle}@${EMAIL_CONFIG.domain}`;
-    
+
     console.log(`📧 Email activated: ${emailAddress}`);
-    
+
     return res.json({
       success: true,
       data: {
@@ -557,7 +573,7 @@ router.post('/activate', async (req: Request, res: Response) => {
         activated: true,
       },
     } as ApiResponse);
-    
+
   } catch (error) {
     console.error('Email activation error:', error);
     return res.status(500).json({
@@ -571,14 +587,14 @@ router.get('/status/:handle', async (req: Request, res: Response) => {
   try {
     const handle = req.params.handle.toLowerCase().replace(/^@/, '');
     const alias = await db.getAliasByHandle(handle);
-    
+
     if (!alias) {
       return res.status(404).json({
         success: false,
         error: 'Handle not found',
       } as ApiResponse);
     }
-    
+
     return res.json({
       success: true,
       data: {
@@ -588,7 +604,7 @@ router.get('/status/:handle', async (req: Request, res: Response) => {
         domain: EMAIL_CONFIG.domain,
       },
     } as ApiResponse);
-    
+
   } catch (error) {
     console.error('Email status error:', error);
     return res.status(500).json({
