@@ -112,9 +112,9 @@ router.put('/:identifier', async (req: Request, res: Response) => {
       });
     }
 
-    // Verify signature
+    // Verify signature - FIXED parameter order!
     const message = `PUT:/gsite/${identifier}:${timestamp}`;
-    const isValidSig = verifySignature(message, signature, publicKey);
+    const isValidSig = verifySignature(publicKey, message, signature);
     if (!isValidSig) {
       return res.status(401).json({
         success: false,
