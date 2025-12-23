@@ -1,0 +1,19 @@
+{
+  "0042d1dccf036d10f7699892ea3fe621cd7c76218ad89fddab51adad2c90b758": {
+    "publicKey": "0042d1dccf036d10f7699892ea3fe621cd7c76218ad89fddab51adad2c90b758",
+    "role": "owner",
+    "permissions": {
+      "*": [
+        "all"
+      ]
+    },
+    "backup": {
+      "version": 1,
+      "encryptedSeed": "test",
+      "nonce": "test",
+      "lastSync": "2025-12-18T08:26:17.188Z"
+    },
+    "createdAt": "2025-12-18T08:26:01.018Z",
+    "lastSeen": "2025-12-23T10:15:30.063Z"
+  }
+}

@@ -108,7 +108,7 @@ class PaymentService {
   final _transactionUpdatesController = StreamController<GnsTransaction>.broadcast();
   
   // API configuration
-  static const String _baseUrl = 'https://gns-server-production.up.railway.app';
+  static const String _baseUrl = 'https://gns-browser-production.up.railway.app';
   
   PaymentService._(this._wallet);
   

@@ -1,9 +1,10 @@
 // ===========================================
-// GNS Token Layer - Stellar Service (v3)
+// GNS Token Layer - Stellar Service (v4 - FIXED)
 // ===========================================
 // Full Stellar integration with transaction signing
 // Uses stellar_flutter_sdk for client-side signing
-// v3: Added mainnet account funding via createAccount operation
+// v4: REMOVED client-side mainnet funding (security fix)
+//     Funding now happens via backend airdrop only
 
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
@@ -23,15 +24,10 @@ class StellarConfig {
   static const String gnsTokenCode = 'GNS';
   static const String gnsIssuerPublic = 'GBVZTFST4PIPV5C3APDIVULNZYZENQSLGDSOKOVQI77GSMT6WVYGF5GL';
   
-  // Distribution account for funding new users (MAINNET)
-  // ⚠️ This should ideally be loaded from secure storage/environment
-  static const String distributionPublic = 'YOUR_DISTRIBUTION_PUBLIC_KEY';  // TODO: Set this
-  static const String distributionSecret = 'YOUR_DISTRIBUTION_SECRET_KEY';  // TODO: Set this securely
-  
   // Starting balance for new accounts (minimum ~1 XLM for account + 0.5 for trustline reserve)
   static const String startingBalanceXlm = '1.5';
   
-  // Use testnet by default
+  // Network selection - FALSE = MAINNET
   static bool useTestnet = false;
   
   static String get horizonUrl => useTestnet ? horizonTestnet : horizonMainnet;
@@ -151,62 +147,8 @@ class StellarService {
     }
   }
   
-  /// Fund account on Mainnet by creating it with XLM from distribution account
-  /// This uses the createAccount operation to fund new Stellar accounts
-  Future<TransactionResult> fundAccountMainnet(String newAccountPublicKey) async {
-    if (StellarConfig.useTestnet) {
-      debugPrint('Use fundAccountTestnet for testnet');
-      return TransactionResult(success: false, error: 'Use fundAccountTestnet for testnet');
-    }
-    
-    _ensureInitialized();
-    
-    try {
-      debugPrint('🚀 Funding new account on Mainnet: $newAccountPublicKey');
-      
-      // Load distribution account keypair
-      final distributionKeypair = KeyPair.fromSecretSeed(StellarConfig.distributionSecret);
-      
-      // Verify distribution account matches config
-      if (distributionKeypair.accountId != StellarConfig.distributionPublic) {
-        debugPrint('⚠️ Distribution keypair mismatch!');
-      }
-      
-      // Load distribution account
-      final distributionAccount = await _sdk.accounts.account(StellarConfig.distributionPublic);
-      
-      // Build createAccount transaction
-      final transaction = TransactionBuilder(distributionAccount)
-          .addOperation(
-            CreateAccountOperationBuilder(
-              newAccountPublicKey,
-              StellarConfig.startingBalanceXlm,
-            ).build(),
-          )
-          .build();
-      
-      // Sign with distribution key
-      transaction.sign(distributionKeypair, StellarConfig.network);
-      
-      // Submit transaction
-      final response = await _sdk.submitTransaction(transaction);
-      
-      if (response.success) {
-        debugPrint('✅ Account created and funded with ${StellarConfig.startingBalanceXlm} XLM!');
-        debugPrint('   Hash: ${response.hash}');
-        return TransactionResult(success: true, hash: response.hash);
-      } else {
-        final error = response.extras?.resultCodes?.operationsResultCodes?.join(', ') ?? 'Unknown error';
-        debugPrint('❌ Account creation failed: $error');
-        return TransactionResult(success: false, error: error);
-      }
-    } catch (e) {
-      debugPrint('❌ Fund account error: $e');
-      return TransactionResult(success: false, error: e.toString());
-    }
-  }
-  
-  /// Fund account (works on both testnet and mainnet)
+  /// Fund account - TESTNET ONLY
+  /// On mainnet, accounts are funded via backend airdrop when claiming a @handle
   Future<TransactionResult> fundAccount(String stellarPublicKey) async {
     if (StellarConfig.useTestnet) {
       final success = await fundAccountTestnet(stellarPublicKey);
@@ -215,7 +157,13 @@ class StellarService {
         error: success ? null : 'Friendbot failed',
       );
     } else {
-      return fundAccountMainnet(stellarPublicKey);
+      // ❌ MAINNET: Cannot fund from client - must use backend airdrop
+      debugPrint('❌ Cannot fund account on mainnet from client');
+      debugPrint('   User must claim a @handle to receive XLM airdrop');
+      return TransactionResult(
+        success: false,
+        error: 'Claim a @handle to activate your wallet with XLM',
+      );
     }
   }
   
@@ -409,7 +357,7 @@ class StellarService {
   }
   
   /// Create trustline AND claim all GNS balances in one flow
-  /// Now includes account funding for mainnet!
+  /// FIXED: No longer tries to auto-fund on mainnet
   Future<TransactionResult> claimAllGnsTokens({
     required String stellarPublicKey,
     required Uint8List privateKeyBytes,
@@ -421,7 +369,17 @@ class StellarService {
       final exists = await accountExists(stellarPublicKey);
       
       if (!exists) {
-        debugPrint('Account does not exist, funding it first...');
+        // ❌ MAINNET: Cannot fund from client
+        if (!StellarConfig.useTestnet) {
+          debugPrint('❌ Account not funded - user needs to claim @handle first');
+          return TransactionResult(
+            success: false,
+            error: 'Account not activated. Claim a @handle to receive XLM airdrop first!',
+          );
+        }
+        
+        // ✅ TESTNET: Use friendbot
+        debugPrint('Account does not exist, funding via friendbot...');
         final fundResult = await fundAccount(stellarPublicKey);
         
         if (!fundResult.success) {

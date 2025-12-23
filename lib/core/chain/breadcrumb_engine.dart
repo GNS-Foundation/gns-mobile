@@ -399,8 +399,8 @@ class BreadcrumbEngine {
   Future<Position?> _getPosition() async {
     try {
       return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,  // ✅ Changed from high to medium (works better indoors)
-      ).timeout(const Duration(seconds: 30));  // ✅ Increased from 15 to 30 seconds
+        desiredAccuracy: LocationAccuracy.medium,
+      ).timeout(const Duration(seconds: 30)); 
     } catch (e) {
       debugPrint('GPS error: $e');
       return null;

@@ -530,21 +530,33 @@ class CommunicationService {
       // Decrypt payload (using X25519 encryption keys!)
       // ✅ CRITICAL: Must use X25519 encryption keys, not Ed25519 identity keys
       
-      // ✅ FIXED: Get sender's encryption key with caching
-      final senderEncryptionKey = await _getSenderEncryptionKey(
-        envelope.fromPublicKey,
-        envelope.fromHandle,
-      );
+      // ✅ FIX: For single-recipient messages (with ephemeral key), we DON'T need sender's encryption key
+      final isSingleRecipient = envelope.recipientKeys == null;
       
-      if (senderEncryptionKey == null) {
-        debugPrint('❌ Cannot decrypt: sender encryption key not found');
-        return null;
+      Uint8List senderEncryptionKeyBytes;
+      
+      if (isSingleRecipient) {
+        // Single-recipient: use dummy 32-byte key (not used in decryption anyway)
+        senderEncryptionKeyBytes = Uint8List(32);
+        debugPrint('📬 Single-recipient message, using ephemeral key for decryption');
+      } else {
+        // Multi-recipient: need sender's encryption key
+        final senderEncryptionKey = await _getSenderEncryptionKey(
+          envelope.fromPublicKey,
+          envelope.fromHandle,
+        );
+        
+        if (senderEncryptionKey == null) {
+          debugPrint('❌ Cannot decrypt multi-recipient: sender encryption key not found');
+          return null;
+        }
+        senderEncryptionKeyBytes = _hexToBytes(senderEncryptionKey);
       }
       
       final decrypted = await _crypto.decrypt(
         envelope: envelope,
-        recipientPrivateKey: _wallet.encryptionPrivateKeyBytes!,  // ✅ X25519 private key
-        recipientPublicKey: _hexToBytes(senderEncryptionKey),     // ✅ Sender's X25519 public key
+        recipientPrivateKey: _wallet.encryptionPrivateKeyBytes!,
+        recipientPublicKey: senderEncryptionKeyBytes,
       );
       
       if (!decrypted.success || decrypted.payload == null) {

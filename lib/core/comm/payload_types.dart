@@ -274,7 +274,7 @@ class LinkPreview {
   );
 }
 
-/// Email-like structured message
+/// Email-like structured message (from gcrumbs.com gateway)
 class EmailPayload extends GnsPayload {
   @override
   String get type => PayloadType.email;
@@ -287,6 +287,19 @@ class EmailPayload extends GnsPayload {
   
   /// Body format: 'plain', 'markdown', 'html'
   final String bodyFormat;
+  
+  /// External sender email address (e.g., "friend@gmail.com")
+  /// This is set when receiving emails from the gateway
+  final String? from;
+  
+  /// Original message ID from email headers
+  final String? messageId;
+  
+  /// When the email was received by the gateway (ISO timestamp)
+  final String? receivedAt;
+  
+  /// Email reference chain for threading
+  final List<String>? references;
   
   /// Attachment references
   final List<AttachmentRef>? attachments;
@@ -304,6 +317,10 @@ class EmailPayload extends GnsPayload {
     required this.subject,
     required this.body,
     this.bodyFormat = 'plain',
+    this.from,
+    this.messageId,
+    this.receivedAt,
+    this.references,
     this.attachments,
     this.customHeaders,
     this.inReplyTo,
@@ -312,9 +329,14 @@ class EmailPayload extends GnsPayload {
 
   @override
   Map<String, dynamic> toJson() => {
+    'type': 'email',
     'subject': subject,
     'body': body,
     'bodyFormat': bodyFormat,
+    'from': from,
+    'messageId': messageId,
+    'receivedAt': receivedAt,
+    'references': references,
     'attachments': attachments?.map((a) => a.toJson()).toList(),
     'customHeaders': customHeaders,
     'inReplyTo': inReplyTo,
@@ -322,9 +344,15 @@ class EmailPayload extends GnsPayload {
   };
 
   factory EmailPayload.fromJson(Map<String, dynamic> json) => EmailPayload(
-    subject: json['subject'] as String,
-    body: json['body'] as String,
+    subject: json['subject'] as String? ?? '(No subject)',
+    body: json['body'] as String? ?? '',
     bodyFormat: json['bodyFormat'] as String? ?? 'plain',
+    from: json['from'] as String?,
+    messageId: json['messageId'] as String?,
+    receivedAt: json['receivedAt'] as String?,
+    references: json['references'] != null
+        ? List<String>.from(json['references'] as List)
+        : null,
     attachments: json['attachments'] != null
         ? (json['attachments'] as List).map((a) => AttachmentRef.fromJson(a)).toList()
         : null,
@@ -334,6 +362,26 @@ class EmailPayload extends GnsPayload {
     inReplyTo: json['inReplyTo'] as String?,
     quotedContent: json['quotedContent'] as String?,
   );
+  
+  /// Get display-friendly sender name (part before @)
+  String get senderName {
+    if (from == null || from!.isEmpty) return 'Unknown';
+    final parts = from!.split('@');
+    return parts.first;
+  }
+  
+  /// Get sender domain (part after @)
+  String get senderDomain {
+    if (from == null || !from!.contains('@')) return '';
+    final parts = from!.split('@');
+    return parts.length > 1 ? parts.last : '';
+  }
+  
+  /// Get formatted sender display (name + domain)
+  String get senderDisplay {
+    if (from == null || from!.isEmpty) return 'Unknown sender';
+    return from!;
+  }
 }
 
 /// Reference to an attachment (metadata only, content stored separately)

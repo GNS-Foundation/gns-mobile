@@ -23,7 +23,7 @@ import '../widgets/identity_card.dart';
 import '../widgets/gns_search_bar.dart';
 import '../widgets/share_facet_picker.dart';
 import '../profile/profile_editor_screen.dart';
-import '../profile/identity_viewer_screen.dart';
+import '../screens/identity_viewer_screen.dart';
 import '../screens/gns_token_screen.dart';
 import '../screens/handle_management_screen.dart';
 import '../financial/send_money_screen.dart';

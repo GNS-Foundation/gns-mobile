@@ -9,7 +9,7 @@ import '../../core/profile/profile_service.dart';
 import '../../core/contacts/contact_entry.dart';
 import '../../core/theme/theme_service.dart';
 import '../widgets/contact_list_item.dart';
-import '../profile/identity_viewer_screen.dart';
+import '../screens/identity_viewer_screen.dart';
 
 class ContactsTab extends StatefulWidget {
   final ProfileService profileService;

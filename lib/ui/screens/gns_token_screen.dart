@@ -553,19 +553,46 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
             const SizedBox(height: 16),
             
             if (!_accountExists) ...[
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _fundAccount,
-                  icon: const Icon(Icons.account_balance),
-                  label: const Text('Fund Account (Testnet)'),
+              if (StellarConfig.useTestnet) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _fundAccount,
+                    icon: const Icon(Icons.account_balance),
+                    label: const Text('Fund Account (Testnet)'),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Get 10,000 XLM to activate your Stellar wallet',
-                style: TextStyle(color: Colors.grey[600], fontSize: 12),
-              ),
+                const SizedBox(height: 8),
+                Text(
+                  'Get 10,000 XLM to activate your Stellar wallet',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                ),
+              ] else ...[
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.orange[50],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange[200]!),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.orange[700]),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Account needs XLM to activate',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange[700]),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Claim a @handle to receive 2 XLM + 200 GNS airdrop',
+                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ] else ...[
               SizedBox(
                 width: double.infinity,

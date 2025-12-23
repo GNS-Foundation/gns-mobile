@@ -8,9 +8,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
+import 'package:convert/convert.dart';
 import '../../core/gns/identity_wallet.dart';
 import '../../core/theme/theme_service.dart';
-import '../../core/dix/dix_post_service.dart';
 
 class DixComposeScreen extends StatefulWidget {
   final String? replyToId;
@@ -31,13 +33,14 @@ class DixComposeScreen extends StatefulWidget {
 class _DixComposeScreenState extends State<DixComposeScreen> {
   final TextEditingController _controller = TextEditingController();
   final FocusNode _focusNode = FocusNode();
-  final DixPostService _postService = DixPostService();
+  final _wallet = IdentityWallet();
   
   bool _posting = false;
   bool _includeLocation = false;
   String? _locationLabel;
   List<String> _detectedTags = [];
   List<String> _detectedMentions = [];
+  String? _handle;
   
   static const int _maxLength = 500;
 
@@ -45,11 +48,24 @@ class _DixComposeScreenState extends State<DixComposeScreen> {
   void initState() {
     super.initState();
     _controller.addListener(_onTextChanged);
+    _loadHandle();
     
     // Auto-focus
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
+  }
+
+  Future<void> _loadHandle() async {
+    if (!_wallet.isInitialized) {
+      await _wallet.initialize();
+    }
+    _handle = await _wallet.getCurrentHandle();
+    if (_handle == null) {
+      final info = await _wallet.getIdentityInfo();
+      _handle = info.claimedHandle ?? info.reservedHandle;
+    }
+    if (mounted) setState(() {});
   }
 
   @override
@@ -99,39 +115,68 @@ class _DixComposeScreenState extends State<DixComposeScreen> {
     setState(() => _posting = true);
     
     try {
-      // Get identity
-      final wallet = IdentityWallet();
-      if (!wallet.hasIdentity) {
-        _showError('No identity found');
+      final publicKey = _wallet.publicKey;
+      if (publicKey == null) {
+        _showError('No identity found. Please set up your identity first.');
         return;
       }
       
-      // Get handle and trust info
-      final info = await wallet.getIdentityInfo();
-      final handle = info.claimedHandle ?? info.reservedHandle;
-      final trustScore = info.trustScore;
-      final breadcrumbCount = info.breadcrumbCount;
+      // Generate post ID
+      final postId = const Uuid().v4();
+      final createdAt = DateTime.now().toUtc();
       
-      // Create post
-      final post = await _postService.createPost(
-        keypair: wallet.keypair!,
-        text: text,
-        handle: handle,
-        tags: _detectedTags,
-        locationLabel: _includeLocation ? _locationLabel : null,
-        replyToId: widget.replyToId,
-        trustScore: trustScore.toInt(),
-        breadcrumbCount: breadcrumbCount.toInt(),
-      );
+      // Build canonical payload for signing
+      final signedData = {
+        'id': postId,
+        'facet_id': 'dix',
+        'author_public_key': publicKey,
+        'content': text,
+        'created_at': createdAt.toIso8601String(),
+      };
+      final canonicalMessage = _canonicalJson(signedData);
       
-      // Success!
-      HapticFeedback.mediumImpact();
+      // Sign the payload
+      final signature = await _wallet.signString(canonicalMessage);
       
-      if (mounted) {
-        Navigator.of(context).pop(post);
+      debugPrint('🔏 Creating DIX post...');
+      debugPrint('   ID: $postId');
+      debugPrint('   Author: $publicKey');
+      debugPrint('   Handle: $_handle');
+      
+      // Call Supabase RPC
+      final response = await Supabase.instance.client.rpc('publish_dix_post', params: {
+        'p_id': postId,
+        'p_facet_id': 'dix',
+        'p_author_public_key': publicKey,
+        'p_author_handle': _handle,
+        'p_content': text,
+        'p_media': <dynamic>[],
+        'p_location_name': _includeLocation ? _locationLabel : null,
+        'p_visibility': 'public',
+        'p_created_at': createdAt.toIso8601String(),
+        'p_reply_to_post_id': widget.replyToId,
+        'p_tags': _detectedTags,
+        'p_mentions': _detectedMentions,
+        'p_signature': signature,
+      });
+
+      final responseMap = response as Map<String, dynamic>;
+
+      if (responseMap['success'] == true) {
+        debugPrint('✅ Post created successfully!');
+        HapticFeedback.heavyImpact();
+        
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      } else {
+        final error = responseMap['error'] ?? 'Failed to create post';
+        debugPrint('❌ Post creation failed: $error');
+        _showError(error.toString());
       }
     } catch (e) {
-      _showError('Failed to post: $e');
+      debugPrint('❌ Failed to create post: $e');
+      _showError('Failed to post: ${e.toString()}');
     } finally {
       if (mounted) {
         setState(() => _posting = false);
@@ -139,446 +184,344 @@ class _DixComposeScreenState extends State<DixComposeScreen> {
     }
   }
 
+  /// Create canonical JSON with sorted keys (for signing)
+  String _canonicalJson(dynamic obj) {
+    if (obj == null) return 'null';
+    if (obj is bool) return obj.toString();
+    if (obj is num) {
+      if (obj is int) return obj.toString();
+      if (obj == obj.truncateToDouble()) return obj.toInt().toString();
+      return obj.toString();
+    }
+    if (obj is String) return '"${obj.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"';
+    if (obj is List) {
+      return '[${obj.map(_canonicalJson).join(',')}]';
+    }
+    if (obj is Map) {
+      final sortedKeys = obj.keys.map((k) => k.toString()).toList()..sort();
+      final pairs = sortedKeys.map((key) {
+        return '"$key":${_canonicalJson(obj[key])}';
+      });
+      return '{${pairs.join(',')}}';
+    }
+    return obj.toString();
+  }
+
   void _showError(String message) {
     if (!mounted) return;
-    
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: Colors.red,
-        behavior: SnackBarBehavior.floating,
       ),
     );
+    setState(() => _posting = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = ThemeService().isDark;
     final textLength = _controller.text.length;
-    final canPost = textLength > 0 && textLength <= _maxLength && !_posting;
+    final isOverLimit = textLength > _maxLength;
+    final canPost = textLength > 0 && !isOverLimit && !_posting;
     
     return Scaffold(
       backgroundColor: isDark ? AppTheme.darkBackground : AppTheme.lightBackground,
-      appBar: _buildAppBar(isDark, canPost),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Quote preview (if quoting)
-            if (widget.quoteText != null) _buildQuotePreview(isDark),
-            
-            // Compose area
-            Expanded(
-              child: _buildComposeArea(isDark),
-            ),
-            
-            // Bottom bar
-            _buildBottomBar(isDark, textLength),
-          ],
+      appBar: AppBar(
+        backgroundColor: isDark ? AppTheme.darkSurface : AppTheme.lightSurface,
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(
+            Icons.close,
+            color: isDark ? AppTheme.darkTextPrimary : AppTheme.lightTextPrimary,
+          ),
+          onPressed: () => Navigator.pop(context),
         ),
-      ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar(bool isDark, bool canPost) {
-    return AppBar(
-      backgroundColor: isDark ? AppTheme.darkSurface : AppTheme.lightSurface,
-      elevation: 0,
-      leading: IconButton(
-        icon: Icon(
-          Icons.close,
-          color: isDark ? AppTheme.darkTextPrimary : AppTheme.lightTextPrimary,
-        ),
-        onPressed: () => Navigator.of(context).pop(),
-      ),
-      title: Text(
-        widget.replyToId != null ? 'Reply' : 'New Post',
-        style: TextStyle(
-          color: isDark ? AppTheme.darkTextPrimary : AppTheme.lightTextPrimary,
-          fontSize: 18,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      actions: [
-        Padding(
-          padding: const EdgeInsets.only(right: 12),
-          child: _buildPostButton(isDark, canPost),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPostButton(bool isDark, bool canPost) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      child: ElevatedButton(
-        onPressed: canPost ? _post : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: canPost 
-            ? const Color(0xFF6366F1) // Indigo
-            : (isDark ? AppTheme.darkSurfaceLight : AppTheme.lightSurfaceLight),
-          foregroundColor: canPost 
-            ? Colors.white 
-            : (isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted),
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
+        title: Text(
+          widget.replyToId != null ? 'Reply' : 'New Post',
+          style: TextStyle(
+            color: isDark ? AppTheme.darkTextPrimary : AppTheme.lightTextPrimary,
+            fontWeight: FontWeight.w600,
           ),
         ),
-        child: _posting
-          ? const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            )
-          : const Text(
-              'Post',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 15,
-              ),
-            ),
-      ),
-    );
-  }
-
-  Widget _buildQuotePreview(bool isDark) {
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.darkSurfaceLight : AppTheme.lightSurfaceLight,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.format_quote,
-                size: 16,
-                color: isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Quoting ${widget.quoteAuthor ?? 'post'}',
-                style: TextStyle(
-                  color: isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: ElevatedButton(
+              onPressed: canPost ? _post : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF6366F1),
+                disabledBackgroundColor: const Color(0xFF6366F1).withOpacity(0.4),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
                 ),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            widget.quoteText!,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: isDark ? AppTheme.darkTextSecondary : AppTheme.lightTextSecondary,
-              fontSize: 14,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildComposeArea(bool isDark) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // User info row
-          _buildUserRow(isDark),
-          const SizedBox(height: 16),
-          
-          // Text input
-          TextField(
-            controller: _controller,
-            focusNode: _focusNode,
-            maxLines: null,
-            minLines: 5,
-            maxLength: _maxLength,
-            maxLengthEnforcement: MaxLengthEnforcement.enforced,
-            style: TextStyle(
-              color: isDark ? AppTheme.darkTextPrimary : AppTheme.lightTextPrimary,
-              fontSize: 18,
-              height: 1.4,
-            ),
-            decoration: InputDecoration(
-              hintText: widget.replyToId != null 
-                ? "Write your reply..."
-                : "What's happening? 🌍",
-              hintStyle: TextStyle(
-                color: isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted,
-                fontSize: 18,
-              ),
-              border: InputBorder.none,
-              counterText: '', // Hide default counter
-            ),
-          ),
-          
-          // Detected tags preview
-          if (_detectedTags.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            _buildTagsPreview(isDark),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildUserRow(bool isDark) {
-    final wallet = IdentityWallet();
-    
-    return FutureBuilder<IdentityInfo>(
-      future: wallet.getIdentityInfo(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const SizedBox.shrink();
-        }
-        
-        final info = snapshot.data!;
-        final handle = info.claimedHandle ?? info.reservedHandle;
-        final displayName = info.displayName;
-        
-        return Row(
-          children: [
-            // Avatar
-            Container(
-              width: 44,
-              height: 44,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                ),
-              ),
-              child: Center(
-                child: Text(
-                  (displayName)[0].toUpperCase(),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 18,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            
-            // Name and handle
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  displayName,
-                  style: TextStyle(
-                    color: isDark ? AppTheme.darkTextPrimary : AppTheme.lightTextPrimary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                  ),
-                ),
-                if (handle != null)
-                  Text(
-                    '@$handle',
-                    style: const TextStyle(
-                      color: Color(0xFF6366F1),
-                      fontSize: 14,
+              child: _posting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Post',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-              ],
             ),
-            
-            const Spacer(),
-            
-            // Globe icon
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFF6366F1).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Compose area
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('🌍', style: TextStyle(fontSize: 14)),
-                  SizedBox(width: 4),
-                  Text(
-                    'Public',
+                  // Author info
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 24,
+                        backgroundColor: const Color(0xFF6366F1).withOpacity(0.2),
+                        child: Text(
+                          (_handle?.isNotEmpty == true) 
+                              ? _handle![0].toUpperCase()
+                              : '?',
+                          style: const TextStyle(
+                            color: Color(0xFF6366F1),
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _handle != null ? 'dix@$_handle' : 'dix@you',
+                            style: TextStyle(
+                              color: isDark ? AppTheme.darkTextPrimary : AppTheme.lightTextPrimary,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                            ),
+                          ),
+                          Text(
+                            'Public post',
+                            style: TextStyle(
+                              color: isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Quote preview (if quoting)
+                  if (widget.quoteText != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isDark 
+                            ? Colors.white.withOpacity(0.05)
+                            : Colors.black.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isDark 
+                              ? Colors.white.withOpacity(0.1)
+                              : Colors.black.withOpacity(0.1),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (widget.quoteAuthor != null)
+                            Text(
+                              '@${widget.quoteAuthor}',
+                              style: TextStyle(
+                                color: const Color(0xFF6366F1),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          const SizedBox(height: 4),
+                          Text(
+                            widget.quoteText!,
+                            style: TextStyle(
+                              color: isDark ? AppTheme.darkTextSecondary : AppTheme.lightTextSecondary,
+                              fontSize: 14,
+                            ),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  
+                  // Text field
+                  TextField(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    maxLines: null,
+                    minLines: 5,
                     style: TextStyle(
-                      color: Color(0xFF6366F1),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+                      color: isDark ? AppTheme.darkTextPrimary : AppTheme.lightTextPrimary,
+                      fontSize: 18,
+                      height: 1.4,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: widget.replyToId != null 
+                          ? 'Post your reply...'
+                          : "What's happening?",
+                      hintStyle: TextStyle(
+                        color: isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted,
+                        fontSize: 18,
+                      ),
+                      border: InputBorder.none,
                     ),
                   ),
+                  
+                  // Detected tags
+                  if (_detectedTags.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _detectedTags.map((tag) => Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6366F1).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          '#$tag',
+                          style: const TextStyle(
+                            color: Color(0xFF6366F1),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      )).toList(),
+                    ),
+                  ],
+                  
+                  // Detected mentions
+                  if (_detectedMentions.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _detectedMentions.map((mention) => Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          '@$mention',
+                          style: const TextStyle(
+                            color: Color(0xFF10B981),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      )).toList(),
+                    ),
+                  ],
                 ],
               ),
             ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildTagsPreview(bool isDark) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: _detectedTags.map((tag) {
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFF6366F1).withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12),
           ),
-          child: Text(
-            '#$tag',
-            style: const TextStyle(
-              color: Color(0xFF6366F1),
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
+          
+          // Bottom bar
+          Container(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 12,
+              bottom: MediaQuery.of(context).padding.bottom + 12,
+            ),
+            decoration: BoxDecoration(
+              color: isDark ? AppTheme.darkSurface : AppTheme.lightSurface,
+              border: Border(
+                top: BorderSide(
+                  color: isDark 
+                      ? Colors.white.withOpacity(0.1)
+                      : Colors.black.withOpacity(0.1),
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                // Location toggle
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      _includeLocation = !_includeLocation;
+                    });
+                    HapticFeedback.lightImpact();
+                  },
+                  icon: Icon(
+                    _includeLocation ? Icons.location_on : Icons.location_off,
+                    color: _includeLocation 
+                        ? const Color(0xFF10B981)
+                        : (isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted),
+                  ),
+                ),
+                
+                // Media button (placeholder)
+                IconButton(
+                  onPressed: () {
+                    // TODO: Add media
+                    HapticFeedback.lightImpact();
+                  },
+                  icon: Icon(
+                    Icons.image_outlined,
+                    color: isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted,
+                  ),
+                ),
+                
+                const Spacer(),
+                
+                // Character count
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: isOverLimit 
+                        ? Colors.red.withOpacity(0.1)
+                        : (isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05)),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Text(
+                    '$textLength / $_maxLength',
+                    style: TextStyle(
+                      color: isOverLimit 
+                          ? Colors.red
+                          : (isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildBottomBar(bool isDark, int textLength) {
-    final remaining = _maxLength - textLength;
-    final isNearLimit = remaining <= 50;
-    final isOverLimit = remaining < 0;
-    
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.darkSurface : AppTheme.lightSurface,
-        border: Border(
-          top: BorderSide(
-            color: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          // Action buttons
-          _buildActionButton(
-            icon: Icons.image_outlined,
-            onTap: () {
-              // TODO: Image picker
-              _showError('Image upload coming soon!');
-            },
-            isDark: isDark,
-          ),
-          const SizedBox(width: 8),
-          _buildActionButton(
-            icon: Icons.gif_box_outlined,
-            onTap: () {
-              // TODO: GIF picker
-              _showError('GIF picker coming soon!');
-            },
-            isDark: isDark,
-          ),
-          const SizedBox(width: 8),
-          _buildActionButton(
-            icon: _includeLocation ? Icons.location_on : Icons.location_on_outlined,
-            onTap: () {
-              setState(() {
-                _includeLocation = !_includeLocation;
-                if (_includeLocation) {
-                  _locationLabel = 'Rome, Italy'; // TODO: Get actual location
-                }
-              });
-            },
-            isDark: isDark,
-            isActive: _includeLocation,
-          ),
-          
-          const Spacer(),
-          
-          // Character count
-          _buildCharacterCount(remaining, isNearLimit, isOverLimit, isDark),
         ],
       ),
-    );
-  }
-
-  Widget _buildActionButton({
-    required IconData icon,
-    required VoidCallback onTap,
-    required bool isDark,
-    bool isActive = false,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: isActive 
-            ? const Color(0xFF6366F1).withValues(alpha: 0.1)
-            : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Icon(
-          icon,
-          color: isActive 
-            ? const Color(0xFF6366F1)
-            : (isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted),
-          size: 22,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCharacterCount(int remaining, bool isNearLimit, bool isOverLimit, bool isDark) {
-    Color countColor;
-    if (isOverLimit) {
-      countColor = Colors.red;
-    } else if (isNearLimit) {
-      countColor = Colors.orange;
-    } else {
-      countColor = isDark ? AppTheme.darkTextMuted : AppTheme.lightTextMuted;
-    }
-    
-    return Row(
-      children: [
-        // Circular progress
-        SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(
-            value: (_controller.text.length / _maxLength).clamp(0.0, 1.0),
-            strokeWidth: 2.5,
-            backgroundColor: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
-            valueColor: AlwaysStoppedAnimation<Color>(
-              isOverLimit ? Colors.red : const Color(0xFF6366F1),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        
-        // Count text
-        Text(
-          '$remaining',
-          style: TextStyle(
-            color: countColor,
-            fontSize: 14,
-            fontWeight: isNearLimit ? FontWeight.w600 : FontWeight.normal,
-          ),
-        ),
-      ],
     );
   }
 }

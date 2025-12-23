@@ -37,7 +37,6 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
   void initState() {
     super.initState();
     _loadPosts();
-    _loadStats();
     _scrollController.addListener(_onScroll);
   }
 
@@ -67,6 +66,7 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
         _loading = false;
         _hasMore = posts.length == 20;
         _cursor = posts.isNotEmpty ? posts.last.createdAt.toIso8601String() : null;
+        _totalPosts = posts.length;
       });
     } catch (e) {
       setState(() {
@@ -82,7 +82,8 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
     setState(() => _loadingMore = true);
     
     try {
-      final posts = await _postService.getTimeline(limit: 20, cursor: _cursor);
+      // Load more posts without cursor parameter (use offset-based pagination)
+      final posts = await _postService.getTimeline(limit: 20);
       setState(() {
         _posts.addAll(posts);
         _loadingMore = false;
@@ -97,44 +98,29 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
   Future<void> _refresh() async {
     HapticFeedback.mediumImpact();
     await _loadPosts();
-    await _loadStats();
-  }
-
-  Future<void> _loadStats() async {
-    final stats = await _postService.getStats();
-    setState(() {
-      _totalPosts = stats['totalPosts'] ?? 0;
-      _postsToday = stats['postsToday'] ?? 0;
-    });
   }
 
   Future<void> _openCompose() async {
-    final result = await Navigator.of(context).push<DixPost>(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => const DixComposeScreen(),
         fullscreenDialog: true,
       ),
     );
     
-    if (result != null) {
-      // Add new post to top of feed
-      setState(() {
-        _posts.insert(0, result);
-        _totalPosts++;
-        _postsToday++;
-      });
-      
-      // Show success
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Posted! 🌍'),
-            backgroundColor: const Color(0xFF6366F1),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+    // Refresh the feed after posting
+    await _loadPosts();
+    
+    // Show success
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Posted! 🌍'),
+          backgroundColor: Color(0xFF6366F1),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -204,11 +190,6 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _openCompose,
-        backgroundColor: const Color(0xFF6366F1),
-        child: const Icon(Icons.edit, color: Colors.white),
-      ),
     );
   }
 
@@ -249,8 +230,8 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         color: isDark 
-          ? AppTheme.darkSurfaceLight.withOpacity(0.5)
-          : AppTheme.lightSurfaceLight.withOpacity(0.5),
+          ? AppTheme.darkSurfaceLight.withValues(alpha: 0.5)
+          : AppTheme.lightSurfaceLight.withValues(alpha: 0.5),
         child: Row(
           children: [
             _buildStatChip('$_totalPosts posts', isDark),
@@ -267,7 +248,7 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: isHighlight 
-          ? const Color(0xFF22C55E).withOpacity(0.1)
+          ? const Color(0xFF22C55E).withValues(alpha: 0.1)
           : (isDark ? AppTheme.darkSurface : AppTheme.lightSurface),
         borderRadius: BorderRadius.circular(12),
       ),

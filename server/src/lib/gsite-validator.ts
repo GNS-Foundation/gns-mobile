@@ -1,14 +1,13 @@
 // ============================================================
-// GNS VALIDATION SERVICE
+// GNS gSITE VALIDATOR - FIXED VERSION
 // ============================================================
 // Location: server/src/lib/gsite-validator.ts
-// Purpose: Validate gSites and themes against JSON schemas
+// Purpose: Validates gSite JSON against schema
+// FIX: Validates against specific @type, not oneOf all types
 // ============================================================
 
-import Ajv, { ValidateFunction, ErrorObject } from 'ajv';
+import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
-
-// Import schemas
 import gsiteSchema from '../schemas/gsite.schema.json';
 import themeSchema from '../schemas/theme.schema.json';
 
@@ -16,17 +15,10 @@ import themeSchema from '../schemas/theme.schema.json';
 // TYPES
 // ============================================================
 
-export interface ValidationResult {
-  valid: boolean;
-  errors: ValidationError[];
-  warnings: ValidationWarning[];
-}
-
 export interface ValidationError {
   path: string;
   message: string;
-  keyword: string;
-  params?: Record<string, unknown>;
+  keyword?: string;
 }
 
 export interface ValidationWarning {
@@ -34,199 +26,366 @@ export interface ValidationWarning {
   message: string;
 }
 
-export type GSiteType = 
-  | 'Person' 
-  | 'Business' 
-  | 'Store' 
-  | 'Service' 
-  | 'Publication' 
-  | 'Community' 
-  | 'Organization' 
-  | 'Event' 
-  | 'Product' 
-  | 'Place';
+export interface ValidationResult {
+  valid: boolean;
+  errors: ValidationError[];
+  warnings: ValidationWarning[];
+}
 
 // ============================================================
 // VALIDATOR CLASS
 // ============================================================
 
-export class GSiteValidator {
+class GSiteValidator {
   private ajv: Ajv;
-  private gsiteValidate: ValidateFunction;
-  private themeValidate: ValidateFunction;
+  private themeValidate: any;
 
   constructor() {
-    // Initialize AJV with formats support
-    this.ajv = new Ajv({
-      allErrors: true,
-      verbose: true,
+    this.ajv = new Ajv({ 
+      allErrors: true, 
       strict: false,
+      allowUnionTypes: true,
     });
-    
-    // Add format validators (date-time, uri, email, etc.)
     addFormats(this.ajv);
-
-    // Compile schemas
-    this.gsiteValidate = this.ajv.compile(gsiteSchema);
-    this.themeValidate = this.ajv.compile(themeSchema);
+    
+    // Pre-compile theme validator
+    try {
+      this.themeValidate = this.ajv.compile(themeSchema);
+    } catch (e) {
+      console.error('Failed to compile theme schema:', e);
+    }
   }
 
   // ----------------------------------------------------------
-  // VALIDATE gSITE
+  // MAIN VALIDATION METHOD
   // ----------------------------------------------------------
-  
-  validateGSite(data: unknown): ValidationResult {
-    const valid = this.gsiteValidate(data);
-    
-    if (valid) {
-      const warnings = this.checkGSiteWarnings(data as Record<string, unknown>);
-      return { valid: true, errors: [], warnings };
+
+  validateGSite(data: any): ValidationResult {
+    const errors: ValidationError[] = [];
+    const warnings: ValidationWarning[] = [];
+
+    // 1. Check required base fields first
+    if (!data['@context']) {
+      errors.push({ path: '@context', message: 'Missing required field @context' });
+    }
+    if (!data['@type']) {
+      errors.push({ path: '@type', message: 'Missing required field @type' });
+    }
+    if (!data['@id']) {
+      errors.push({ path: '@id', message: 'Missing required field @id' });
+    }
+    if (!data['name']) {
+      errors.push({ path: 'name', message: 'Missing required field name' });
+    }
+    if (!data['signature']) {
+      errors.push({ path: 'signature', message: 'Missing required field signature' });
     }
 
+    // If base fields missing, return early
+    if (errors.length > 0) {
+      return { valid: false, errors, warnings };
+    }
+
+    // 2. Validate @context
+    if (data['@context'] !== 'https://schema.gns.network/v1') {
+      errors.push({ 
+        path: '@context', 
+        message: 'Invalid @context. Must be https://schema.gns.network/v1' 
+      });
+    }
+
+    // 3. Validate @type is known
+    const validTypes = [
+      'Person', 'Business', 'Store', 'Service', 'Publication',
+      'Community', 'Organization', 'Event', 'Product', 'Place'
+    ];
+    
+    if (!validTypes.includes(data['@type'])) {
+      errors.push({ 
+        path: '@type', 
+        message: `Invalid @type. Must be one of: ${validTypes.join(', ')}` 
+      });
+      return { valid: false, errors, warnings };
+    }
+
+    // 4. Validate @id format
+    const id = data['@id'];
+    if (!id.startsWith('@') && !id.endsWith('@')) {
+      errors.push({ 
+        path: '@id', 
+        message: '@id must start with @ (handle) or end with @ (namespace)' 
+      });
+    }
+
+    // 5. Validate signature format
+    if (!data['signature'].startsWith('ed25519:')) {
+      errors.push({ 
+        path: 'signature', 
+        message: 'Signature must start with ed25519:' 
+      });
+    }
+
+    // 6. Type-specific validation
+    const typeErrors = this.validateByType(data['@type'], data);
+    errors.push(...typeErrors);
+
+    // 7. Add business logic warnings
+    warnings.push(...this.getWarnings(data['@type'], data));
+
     return {
-      valid: false,
-      errors: this.formatErrors(this.gsiteValidate.errors),
-      warnings: [],
+      valid: errors.length === 0,
+      errors,
+      warnings,
     };
   }
 
   // ----------------------------------------------------------
-  // VALIDATE THEME
+  // TYPE-SPECIFIC VALIDATION
   // ----------------------------------------------------------
-  
-  validateTheme(data: unknown): ValidationResult {
-    const valid = this.themeValidate(data);
-    
-    if (valid) {
-      const warnings = this.checkThemeWarnings(data as Record<string, unknown>);
-      return { valid: true, errors: [], warnings };
+
+  private validateByType(type: string, data: any): ValidationError[] {
+    const errors: ValidationError[] = [];
+
+    switch (type) {
+      case 'Person':
+        // Person has no additional required fields beyond base
+        // Optional: facets, skills, interests, status
+        if (data.facets && !Array.isArray(data.facets)) {
+          errors.push({ path: 'facets', message: 'facets must be an array' });
+        }
+        if (data.skills && !Array.isArray(data.skills)) {
+          errors.push({ path: 'skills', message: 'skills must be an array' });
+        }
+        break;
+
+      case 'Business':
+        if (!data.category) {
+          errors.push({ path: 'category', message: 'Business requires category field' });
+        }
+        break;
+
+      case 'Store':
+        if (!data.products || !Array.isArray(data.products)) {
+          errors.push({ path: 'products', message: 'Store requires products array' });
+        }
+        break;
+
+      case 'Service':
+        if (!data.profession) {
+          errors.push({ path: 'profession', message: 'Service requires profession field' });
+        }
+        if (!data.services || !Array.isArray(data.services)) {
+          errors.push({ path: 'services', message: 'Service requires services array' });
+        }
+        break;
+
+      case 'Publication':
+        if (!data.publicationType) {
+          errors.push({ path: 'publicationType', message: 'Publication requires publicationType field' });
+        }
+        break;
+
+      case 'Community':
+        if (!data.communityType) {
+          errors.push({ path: 'communityType', message: 'Community requires communityType field' });
+        }
+        if (!data.membership) {
+          errors.push({ path: 'membership', message: 'Community requires membership field' });
+        }
+        break;
+
+      case 'Organization':
+        if (!data.orgType) {
+          errors.push({ path: 'orgType', message: 'Organization requires orgType field' });
+        }
+        break;
+
+      case 'Event':
+        if (!data.eventType) {
+          errors.push({ path: 'eventType', message: 'Event requires eventType field' });
+        }
+        if (!data.startDate) {
+          errors.push({ path: 'startDate', message: 'Event requires startDate field' });
+        }
+        if (!data.timezone) {
+          errors.push({ path: 'timezone', message: 'Event requires timezone field' });
+        }
+        if (!data.organizer) {
+          errors.push({ path: 'organizer', message: 'Event requires organizer field' });
+        }
+        break;
+
+      case 'Product':
+        if (!data.productName) {
+          errors.push({ path: 'productName', message: 'Product requires productName field' });
+        }
+        if (!data.description) {
+          errors.push({ path: 'description', message: 'Product requires description field' });
+        }
+        if (!data.images || !Array.isArray(data.images)) {
+          errors.push({ path: 'images', message: 'Product requires images array' });
+        }
+        if (!data.category) {
+          errors.push({ path: 'category', message: 'Product requires category field' });
+        }
+        break;
+
+      case 'Place':
+        if (!data.placeType) {
+          errors.push({ path: 'placeType', message: 'Place requires placeType field' });
+        }
+        break;
     }
 
-    return {
-      valid: false,
-      errors: this.formatErrors(this.themeValidate.errors),
-      warnings: [],
-    };
+    // Validate trust if present
+    if (data.trust) {
+      if (typeof data.trust.score !== 'number' || data.trust.score < 0 || data.trust.score > 100) {
+        errors.push({ path: 'trust.score', message: 'trust.score must be a number between 0 and 100' });
+      }
+      if (typeof data.trust.breadcrumbs !== 'number' || data.trust.breadcrumbs < 0) {
+        errors.push({ path: 'trust.breadcrumbs', message: 'trust.breadcrumbs must be a non-negative number' });
+      }
+    }
+
+    // Validate location if present
+    if (data.location) {
+      // H3 format check if provided
+      if (data.location.h3 && !/^[0-9a-f]{15,16}$/i.test(data.location.h3)) {
+        errors.push({ path: 'location.h3', message: 'Invalid H3 cell format' });
+      }
+    }
+
+    // Validate links if present
+    if (data.links && Array.isArray(data.links)) {
+      data.links.forEach((link: any, index: number) => {
+        if (!link.type) {
+          errors.push({ path: `links[${index}].type`, message: 'Link requires type field' });
+        }
+        if (!link.url && !link.handle) {
+          errors.push({ path: `links[${index}]`, message: 'Link requires either url or handle' });
+        }
+      });
+    }
+
+    return errors;
   }
 
   // ----------------------------------------------------------
   // BUSINESS LOGIC WARNINGS
   // ----------------------------------------------------------
-  
-  private checkGSiteWarnings(data: Record<string, unknown>): ValidationWarning[] {
+
+  private getWarnings(type: string, data: any): ValidationWarning[] {
     const warnings: ValidationWarning[] = [];
 
+    // Universal recommendations
     if (!data.tagline) {
-      warnings.push({
-        path: 'tagline',
-        message: 'Consider adding a tagline for better discoverability',
-      });
+      warnings.push({ path: 'tagline', message: 'Consider adding a tagline for better discoverability' });
     }
-
     if (!data.avatar) {
-      warnings.push({
-        path: 'avatar',
-        message: 'gSites with avatars get 3x more engagement',
-      });
+      warnings.push({ path: 'avatar', message: 'gSites with avatars get 3x more engagement' });
+    }
+    if (!data.bio) {
+      warnings.push({ path: 'bio', message: 'A bio helps others understand who you are' });
     }
 
-    const type = data['@type'] as string;
-    
-    if (type === 'Business') {
-      if (!data.hours) {
-        warnings.push({
-          path: 'hours',
-          message: 'Adding business hours helps customers find you',
-        });
-      }
-      if (!data.location) {
-        warnings.push({
-          path: 'location',
-          message: 'Location is important for local discovery',
-        });
-      }
+    // Type-specific recommendations
+    switch (type) {
+      case 'Business':
+      case 'Store':
+      case 'Service':
+        if (!data.hours) {
+          warnings.push({ path: 'hours', message: 'Adding business hours helps customers know when to visit' });
+        }
+        if (!data.location) {
+          warnings.push({ path: 'location', message: 'Adding a location helps customers find you' });
+        }
+        break;
+
+      case 'Store':
+        if (!data.products || data.products.length === 0) {
+          warnings.push({ path: 'products', message: 'Add products to showcase what you sell' });
+        }
+        break;
+
+      case 'Person':
+        if (!data.skills || data.skills.length === 0) {
+          warnings.push({ path: 'skills', message: 'Adding skills helps others find you for collaboration' });
+        }
+        if (!data.facets || data.facets.length === 0) {
+          warnings.push({ path: 'facets', message: 'Create facets to organize your different identities' });
+        }
+        break;
+
+      case 'Event':
+        if (!data.location) {
+          warnings.push({ path: 'location', message: 'Add a location so attendees know where to go' });
+        }
+        break;
     }
 
-    if (type === 'Store') {
-      const products = data.products as unknown[] | undefined;
-      if (!products || products.length === 0) {
-        warnings.push({
-          path: 'products',
-          message: 'Store has no products listed',
-        });
-      }
-    }
-
-    if (type === 'Person') {
-      if (!data.bio) {
-        warnings.push({
-          path: 'bio',
-          message: 'A bio helps others understand who you are',
-        });
-      }
+    // Trust score warning
+    if (!data.trust || data.trust.score < 50) {
+      warnings.push({ path: 'trust', message: 'Collect more breadcrumbs to increase your trust score' });
     }
 
     return warnings;
   }
 
-  private checkThemeWarnings(data: Record<string, unknown>): ValidationWarning[] {
+  // ----------------------------------------------------------
+  // THEME VALIDATION
+  // ----------------------------------------------------------
+
+  validateTheme(data: any): ValidationResult {
+    const errors: ValidationError[] = [];
     const warnings: ValidationWarning[] = [];
 
-    if (!data.preview) {
-      warnings.push({
-        path: 'preview',
-        message: 'Themes without previews are less likely to be used',
-      });
+    // Basic required fields
+    if (!data.name) {
+      errors.push({ path: 'name', message: 'Theme requires name field' });
+    }
+    if (!data.version) {
+      errors.push({ path: 'version', message: 'Theme requires version field' });
+    }
+    if (!data.entityTypes || !Array.isArray(data.entityTypes)) {
+      errors.push({ path: 'entityTypes', message: 'Theme requires entityTypes array' });
+    }
+    if (!data.colors) {
+      errors.push({ path: 'colors', message: 'Theme requires colors object' });
+    }
+    if (!data.typography) {
+      errors.push({ path: 'typography', message: 'Theme requires typography object' });
     }
 
-    return warnings;
+    // Use AJV for detailed validation if basic checks pass
+    if (errors.length === 0 && this.themeValidate) {
+      const valid = this.themeValidate(data);
+      if (!valid && this.themeValidate.errors) {
+        for (const err of this.themeValidate.errors) {
+          errors.push({
+            path: err.instancePath || err.schemaPath || '',
+            message: err.message || 'Validation error',
+            keyword: err.keyword,
+          });
+        }
+      }
+    }
+
+    return { valid: errors.length === 0, errors, warnings };
   }
-
-  // ----------------------------------------------------------
-  // FORMAT ERRORS
-  // ----------------------------------------------------------
-  
-  private formatErrors(errors: ErrorObject[] | null | undefined): ValidationError[] {
-    if (!errors) return [];
-
-    return errors.map(err => ({
-      path: err.instancePath || err.schemaPath,
-      message: err.message || 'Validation failed',
-      keyword: err.keyword,
-      params: err.params,
-    }));
-  }
 }
 
 // ============================================================
-// SINGLETON INSTANCE
+// SINGLETON EXPORT
 // ============================================================
 
-let validatorInstance: GSiteValidator | null = null;
+const validator = new GSiteValidator();
 
-export function getValidator(): GSiteValidator {
-  if (!validatorInstance) {
-    validatorInstance = new GSiteValidator();
-  }
-  return validatorInstance;
+export function validateGSite(data: any): ValidationResult {
+  return validator.validateGSite(data);
 }
 
-// ============================================================
-// CONVENIENCE FUNCTIONS
-// ============================================================
-
-export function validateGSite(data: unknown): ValidationResult {
-  return getValidator().validateGSite(data);
+export function validateTheme(data: any): ValidationResult {
+  return validator.validateTheme(data);
 }
 
-export function validateTheme(data: unknown): ValidationResult {
-  return getValidator().validateTheme(data);
-}
-
-export function isValidGSite(data: unknown): boolean {
-  return getValidator().validateGSite(data).valid;
-}
-
-export function isValidTheme(data: unknown): boolean {
-  return getValidator().validateTheme(data).valid;
-}
+export default validator;

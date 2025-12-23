@@ -1,0 +1,35 @@
+{
+  "name": "GNS Home Hub",
+  "owner": "0042d1dccf036d10f7699892ea3fe621cd7c76218ad89fddab51adad2c90b758",
+  "relayUrl": "wss://gns-relay.railway.app/ws",
+  "localPort": 3500,
+  "autoSync": true,
+  "devices": [
+    {
+      "id": "samsung_tv_living",
+      "name": "Samsung Q60AA 50\" Living Room",
+      "type": "tv",
+      "brand": "samsung",
+      "protocol": "samsungtvws",
+      "connection": {
+        "ip": "192.168.1.215",
+        "port": 8002,
+        "secure": true,
+        "mac": "7C:0A:3F:63:98:C0",
+        "token": "15405992"
+      },
+      "capabilities": [
+        "power",
+        "volume",
+        "mute",
+        "apps",
+        "navigation"
+      ],
+      "status": {
+        "online": false,
+        "lastSeen": "",
+        "state": {}
+      }
+    }
+  ]
+}

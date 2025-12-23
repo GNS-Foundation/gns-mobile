@@ -1,7 +1,7 @@
 /// Facet List Screen - Updated for Meta-Identity Architecture
 /// 
 /// Displays all profile facets with me@ first.
-/// Includes broadcast templates (DIX).
+/// Includes broadcast templates (DIX) and IoT (Home).
 /// Shows facet type badges.
 /// 
 /// Location: lib/ui/screens/facet_list_screen.dart
@@ -10,7 +10,9 @@ import 'package:flutter/material.dart';
 import '../../core/profile/profile_facet.dart';
 import '../../core/profile/facet_storage.dart';
 import '../../core/theme/theme_service.dart';
+import '../../core/gns/identity_wallet.dart';
 import 'facet_editor_screen.dart';
+import 'home_facet_screen.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -75,7 +77,8 @@ class _FacetListScreenState extends State<FacetListScreen> {
     // Separate by type
     final defaultFacet = _facets.where((f) => f.isDefaultPersonal).toList();
     final broadcastFacets = _facets.where((f) => f.isBroadcast).toList();
-    final customFacets = _facets.where((f) => f.isCustom).toList();
+    final iotFacets = _facets.where((f) => f.id == 'home').toList();
+    final customFacets = _facets.where((f) => f.isCustom && f.id != 'home').toList();
     
     return RefreshIndicator(
       onRefresh: _loadFacets,
@@ -128,6 +131,14 @@ class _FacetListScreenState extends State<FacetListScreen> {
             const SizedBox(height: 16),
           ],
 
+          // IoT facets (Home)
+          if (iotFacets.isNotEmpty) ...[
+            _buildSectionHeader('SMART HOME', Icons.home, const Color(0xFF6366F1)),
+            const SizedBox(height: 8),
+            ...iotFacets.map((facet) => _buildFacetCard(facet)),
+            const SizedBox(height: 16),
+          ],
+
           // Custom facets
           if (customFacets.isNotEmpty) ...[
             _buildSectionHeader('CUSTOM FACETS', Icons.face, const Color(0xFFF97316)),
@@ -136,7 +147,7 @@ class _FacetListScreenState extends State<FacetListScreen> {
           ],
 
           // Empty state for custom facets
-          if (customFacets.isEmpty && broadcastFacets.isEmpty) ...[
+          if (customFacets.isEmpty && broadcastFacets.isEmpty && iotFacets.isEmpty) ...[
             const SizedBox(height: 24),
             Center(
               child: Column(
@@ -181,12 +192,13 @@ class _FacetListScreenState extends State<FacetListScreen> {
   Widget _buildFacetCard(ProfileFacet facet) {
     final avatarImage = facet.avatarUrl != null ? _decodeAvatar(facet.avatarUrl!) : null;
     final color = _getFacetColor(facet);
+    final isHomeFacet = facet.id == 'home';
     
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: facet.isDefaultPersonal || facet.isBroadcast
+        side: facet.isDefaultPersonal || facet.isBroadcast || isHomeFacet
             ? BorderSide(color: color.withValues(alpha: 0.3), width: 1)
             : BorderSide.none,
       ),
@@ -313,6 +325,28 @@ class _FacetListScreenState extends State<FacetListScreen> {
       );
     }
     
+    // Home/IoT badge
+    if (facet.id == 'home') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFF6366F1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.sensors, size: 10, color: Colors.white),
+            SizedBox(width: 3),
+            Text(
+              'IoT',
+              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+          ],
+        ),
+      );
+    }
+    
     return const SizedBox.shrink();
   }
 
@@ -357,6 +391,29 @@ class _FacetListScreenState extends State<FacetListScreen> {
                 style: TextStyle(color: AppTheme.textSecondary(context)),
               ),
               const SizedBox(height: 20),
+              
+              // 🏠 SMART HOME Section
+              if (!usedIds.contains('home')) ...[
+                Text(
+                  'SMART HOME',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF6366F1),
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _TemplateChip(
+                  emoji: '🏠',
+                  label: 'Home',
+                  subtitle: 'IoT device control',
+                  color: const Color(0xFF6366F1),
+                  isIoT: true,
+                  onTap: () => _createFromTemplate('home', FacetType.custom),
+                ),
+                const SizedBox(height: 16),
+              ],
               
               // Broadcast Templates Section
               if (!usedIds.contains('dix')) ...[
@@ -469,6 +526,20 @@ class _FacetListScreenState extends State<FacetListScreen> {
   void _createFromTemplate(String templateId, FacetType type) async {
     Navigator.pop(context); // Close bottom sheet
     
+    // Special handling for home facet - create and open IoT screen
+    if (templateId == 'home') {
+      final homeFacet = ProfileFacet(
+        id: 'home',
+        label: 'Home',
+        emoji: '🏠',
+        bio: 'Smart home control',
+      );
+      await _storage.saveFacet(homeFacet);
+      _loadFacets();
+      _openHomeFacet();
+      return;
+    }
+    
     ProfileFacet templateFacet;
     switch (templateId) {
       case 'work':
@@ -521,6 +592,12 @@ class _FacetListScreenState extends State<FacetListScreen> {
   }
 
   void _editFacet(ProfileFacet facet) async {
+    // Special handling for home facet - open IoT control screen
+    if (facet.id == 'home') {
+      _openHomeFacet();
+      return;
+    }
+    
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -529,6 +606,23 @@ class _FacetListScreenState extends State<FacetListScreen> {
     );
     
     _loadFacets();
+  }
+
+  void _openHomeFacet() async {
+    final wallet = IdentityWallet();
+    final info = await wallet.getIdentityInfo();
+    
+    if (mounted) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => HomeFacetScreen(
+            userPublicKey: info.publicKey ?? '',
+            userHandle: info.claimedHandle ?? info.reservedHandle,
+          ),
+        ),
+      );
+    }
   }
 
   void _confirmDeleteFacet(ProfileFacet facet) {
@@ -574,6 +668,7 @@ class _FacetListScreenState extends State<FacetListScreen> {
   Color _getFacetColor(ProfileFacet facet) {
     if (facet.isDefaultPersonal) return AppTheme.primary;
     if (facet.isBroadcast) return const Color(0xFF8B5CF6);
+    if (facet.id == 'home') return const Color(0xFF6366F1);
     
     switch (facet.id) {
       case 'work': return const Color(0xFF3B82F6);
@@ -604,6 +699,7 @@ class _TemplateChip extends StatelessWidget {
   final String? subtitle;
   final Color color;
   final bool isBroadcast;
+  final bool isIoT;
   final VoidCallback onTap;
 
   const _TemplateChip({
@@ -612,13 +708,14 @@ class _TemplateChip extends StatelessWidget {
     this.subtitle,
     required this.color,
     this.isBroadcast = false,
+    this.isIoT = false,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (isBroadcast) {
-      // Full-width broadcast chip
+    if (isBroadcast || isIoT) {
+      // Full-width chip for broadcast/IoT
       return InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
@@ -627,10 +724,9 @@ class _TemplateChip extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [
-                color.withValues(alpha: 0.15),
-                const Color(0xFFEC4899).withValues(alpha: 0.1),
-              ],
+              colors: isIoT
+                  ? [color.withValues(alpha: 0.15), const Color(0xFF10B981).withValues(alpha: 0.1)]
+                  : [color.withValues(alpha: 0.15), const Color(0xFFEC4899).withValues(alpha: 0.1)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -659,19 +755,23 @@ class _TemplateChip extends StatelessWidget {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [color, const Color(0xFFEC4899)],
-                            ),
+                            gradient: isIoT
+                                ? LinearGradient(colors: [color, const Color(0xFF10B981)])
+                                : LinearGradient(colors: [color, const Color(0xFFEC4899)]),
                             borderRadius: BorderRadius.circular(6),
                           ),
-                          child: const Row(
+                          child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.campaign, size: 10, color: Colors.white),
-                              SizedBox(width: 3),
+                              Icon(
+                                isIoT ? Icons.sensors : Icons.campaign,
+                                size: 10,
+                                color: Colors.white,
+                              ),
+                              const SizedBox(width: 3),
                               Text(
-                                'BROADCAST',
-                                style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white),
+                                isIoT ? 'IoT' : 'BROADCAST',
+                                style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white),
                               ),
                             ],
                           ),

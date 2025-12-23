@@ -30,8 +30,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   // Search state
   bool _isSearching = false;
-  String? _error;
-  List<SearchResult> _results = [];
+  List<_SearchResult> _results = [];
   List<ContactEntry> _localContacts = [];
   Timer? _debounceTimer;
 
@@ -82,7 +81,6 @@ class _SearchScreenState extends State<SearchScreen> {
     if (query.isEmpty) {
       setState(() {
         _results = [];
-        _error = null;
         _isSearching = false;
       });
       return;
@@ -114,8 +112,8 @@ class _SearchScreenState extends State<SearchScreen> {
       return handle.contains(normalizedQuery) ||
              displayName.contains(normalizedQuery) ||
              publicKey.startsWith(normalizedQuery);
-    }).map((c) => SearchResult(
-      type: SearchResultType.contact,
+    }).map((c) => _SearchResult(
+      type: _SearchResultType.contact,
       handle: c.handle,
       displayName: c.displayName,
       publicKey: c.publicKey,
@@ -140,36 +138,45 @@ class _SearchScreenState extends State<SearchScreen> {
     }
     
     try {
-      // Call the search API
-      final networkResults = await widget.profileService.searchIdentities(normalizedQuery);
+      // Use the existing search method from profile service
+      final result = await widget.profileService.search(normalizedQuery);
       
       if (!mounted) return;
       
-      // Merge with local results (local first, avoid duplicates)
-      final localPks = _results
-          .where((r) => r.isLocal)
-          .map((r) => r.publicKey.toLowerCase())
-          .toSet();
-      
-      final uniqueNetworkResults = networkResults
-          .where((r) => !localPks.contains(r.publicKey.toLowerCase()))
-          .toList();
-      
-      setState(() {
-        final localResults = _results.where((r) => r.isLocal).toList();
-        _results = [...localResults, ...uniqueNetworkResults];
-        _isSearching = false;
-        _error = null;
-      });
+      // If search was successful, add to results
+      if (result.success && result.identity != null) {
+        final identity = result.identity!;
+        
+        // Check if this result is already in local results
+        final localPks = _results
+            .where((r) => r.isLocal)
+            .map((r) => r.publicKey.toLowerCase())
+            .toSet();
+        
+        if (!localPks.contains(identity.publicKey.toLowerCase())) {
+          final networkResult = _SearchResult(
+            type: _SearchResultType.network,
+            handle: identity.handle,
+            displayName: identity.displayName,
+            publicKey: identity.publicKey,
+            avatarUrl: identity.avatarUrl,
+            isLocal: false,
+          );
+          
+          setState(() {
+            final localResults = _results.where((r) => r.isLocal).toList();
+            _results = [...localResults, networkResult];
+            _isSearching = false;
+          });
+        } else {
+          setState(() => _isSearching = false);
+        }
+      } else {
+        setState(() => _isSearching = false);
+      }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _isSearching = false;
-          // Only show error if no local results
-          if (_results.isEmpty) {
-            _error = 'Search failed: $e';
-          }
-        });
+        setState(() => _isSearching = false);
       }
     }
   }
@@ -180,7 +187,7 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   /// Select a search result
-  void _selectResult(SearchResult result) async {
+  void _selectResult(_SearchResult result) async {
     // Save to search history
     await widget.profileService.addToSearchHistory(result.handle ?? result.publicKey);
     
@@ -378,13 +385,13 @@ class _SearchScreenState extends State<SearchScreen> {
 }
 
 // ===========================================
-// SEARCH RESULT MODEL
+// SEARCH RESULT MODEL (Local to this file)
 // ===========================================
 
-enum SearchResultType { contact, network }
+enum _SearchResultType { contact, network }
 
-class SearchResult {
-  final SearchResultType type;
+class _SearchResult {
+  final _SearchResultType type;
   final String? handle;
   final String? displayName;
   final String publicKey;
@@ -392,7 +399,7 @@ class SearchResult {
   final bool isLocal;
   final double? trustScore;
 
-  SearchResult({
+  _SearchResult({
     required this.type,
     this.handle,
     this.displayName,
@@ -408,7 +415,7 @@ class SearchResult {
 // ===========================================
 
 class _SearchResultTile extends StatelessWidget {
-  final SearchResult result;
+  final _SearchResult result;
   final String query;
   final VoidCallback onTap;
 
@@ -471,7 +478,7 @@ class _SearchResultTile extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
+                color: Colors.green.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: const Text(
@@ -571,7 +578,7 @@ class _ActionCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.1),
+                  color: Colors.blue.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(icon, color: Colors.blue),

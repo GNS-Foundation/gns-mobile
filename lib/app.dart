@@ -10,6 +10,7 @@ import 'core/profile/profile_service.dart';
 import 'core/theme/theme_service.dart';
 import 'navigation/main_navigation.dart';
 import 'ui/screens/welcome_screen.dart';
+import 'ui/widgets/floating_home_button.dart';
 
 class GlobeCrumbsApp extends StatefulWidget {
   const GlobeCrumbsApp({super.key});
@@ -79,10 +80,14 @@ class _GlobeCrumbsAppState extends State<GlobeCrumbsApp> {
     if (!_hasIdentity) {
       return WelcomeScreen(onCreateIdentity: _createIdentityWithHandle);
     }
-    return MainNavigationScreen(
-      wallet: _wallet,
-      profileService: _profileService,
-      onIdentityDeleted: _onIdentityDeleted,
+    
+    // Wrap main navigation with floating home button
+    return FloatingHomeButton(
+      child: MainNavigationScreen(
+        wallet: _wallet,
+        profileService: _profileService,
+        onIdentityDeleted: _onIdentityDeleted,
+      ),
     );
   }
 

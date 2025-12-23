@@ -160,6 +160,7 @@ class CommCryptoService {
         return _decryptSingleRecipient(
           envelope,
           recipientPrivateKey,
+          recipientPublicKey, 
         );
       }
     } catch (e) {
@@ -232,6 +233,7 @@ class CommCryptoService {
   /// Verify envelope signature with Ed25519 public key
   /// 
   /// ✅ DUAL-KEY: senderPublicKey is Ed25519 (32 bytes)
+  /// ✅ FIXED: Now handles both HEX (from backend) and BASE64 (from Flutter) signatures
   /// 
   /// Process:
   /// 1. Get canonical JSON from envelope
@@ -265,8 +267,24 @@ class CommCryptoService {
         debugPrint('   Hash (first 16 bytes): $hashHex...');
       }
       
-      // 4. Parse signature
-      final signatureBytes = base64Decode(envelope.signature);
+      // 4. Parse signature - handle both HEX and BASE64 formats
+      // ✅ FIX: Backend (email gateway, echo bot) sends HEX (128 chars for 64 bytes)
+      //         Flutter clients send BASE64 (88 chars for 64 bytes)
+      Uint8List signatureBytes;
+      if (envelope.signature.length == 128 && _isHexString(envelope.signature)) {
+        // HEX format (from email gateway and echo bot)
+        signatureBytes = _hexToBytes(envelope.signature);
+        debugPrint('   Signature format: HEX (${envelope.signature.length} chars → ${signatureBytes.length} bytes)');
+      } else {
+        // BASE64 format (from Flutter clients)
+        signatureBytes = base64Decode(envelope.signature);
+        debugPrint('   Signature format: BASE64 (${envelope.signature.length} chars → ${signatureBytes.length} bytes)');
+      }
+      
+      if (signatureBytes.length != 64) {
+        debugPrint('   ❌ Invalid signature length: ${signatureBytes.length} bytes (expected 64)');
+        return false;
+      }
       
       // 5. Verify with Ed25519
       final algorithm = Ed25519();
@@ -289,6 +307,12 @@ class CommCryptoService {
       debugPrint('   ❌ Verification error: $e');
       return false;
     }
+  }
+
+  /// Check if a string is valid hexadecimal
+  bool _isHexString(String s) {
+    final hexRegex = RegExp(r'^[0-9a-fA-F]+$');
+    return hexRegex.hasMatch(s);
   }
 
   // ==========================================================================
@@ -427,22 +451,37 @@ class CommCryptoService {
   Future<DecryptResult> _decryptSingleRecipient(
     GnsEnvelope envelope,
     Uint8List recipientPrivateKey,  // ✅ X25519 private key (32 bytes)
+    Uint8List recipientPublicKey,   
   ) async {
     try {
       debugPrint('🔓 Decrypting message (X25519)');
       
       // Parse envelope data
       final encryptedBytes = base64Decode(envelope.encryptedPayload);
-      final ephemeralPublicBytes = base64Decode(envelope.ephemeralPublicKey);
+      
+      // ✅ FIX: Handle ephemeralPublicKey in both HEX and BASE64 formats
+      Uint8List ephemeralPublicBytes;
+      if (envelope.ephemeralPublicKey.length == 64 && _isHexString(envelope.ephemeralPublicKey)) {
+        // HEX format (from backend)
+        ephemeralPublicBytes = _hexToBytes(envelope.ephemeralPublicKey);
+      } else {
+        // BASE64 format (from Flutter)
+        ephemeralPublicBytes = base64Decode(envelope.ephemeralPublicKey);
+      }
+      
       final nonceBytes = base64Decode(envelope.nonce);
       
       final ciphertext = encryptedBytes.sublist(0, encryptedBytes.length - _macLength);
       final mac = Mac(encryptedBytes.sublist(encryptedBytes.length - _macLength));
 
       // ✅ DUAL-KEY: recipientPrivateKey is ALREADY X25519 (32 bytes)
-      // NO CONVERSION NEEDED!
+      // NO CONVERSION NEEDED - use SimpleKeyPairData directly!
       final x25519 = X25519();
-      final myKeyPair = await x25519.newKeyPairFromSeed(recipientPrivateKey);
+      final myKeyPair = SimpleKeyPairData(
+        recipientPrivateKey,
+        publicKey: SimplePublicKey(recipientPublicKey, type: KeyPairType.x25519),
+        type: KeyPairType.x25519,
+      );
       
       // Derive shared secret
       final sharedSecret = await x25519.sharedSecretKey(
@@ -453,6 +492,12 @@ class CommCryptoService {
         ),
       );
       final sharedBytes = await sharedSecret.extractBytes();
+
+      // DEBUG: Log keys for troubleshooting
+      final myPublicKey = await myKeyPair.extractPublicKey();
+      debugPrint('   🔑 My X25519 public: ${_bytesToHex(Uint8List.fromList(myPublicKey.bytes)).substring(0, 16)}...');
+      debugPrint('   🔑 Ephemeral public: ${_bytesToHex(ephemeralPublicBytes).substring(0, 16)}...');
+      debugPrint('   🔑 Shared secret: ${_bytesToHex(Uint8List.fromList(sharedBytes)).substring(0, 16)}...');
 
       // Derive decryption key
       final algorithm = Hkdf(
