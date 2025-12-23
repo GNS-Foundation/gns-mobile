@@ -1,22 +1,19 @@
 // ============================================================
 // GNS gSITE API ROUTES
 // ============================================================
-// Location: server/src/routes/gsite.routes.ts
+// Location: server/src/api/gsite.ts
 // Purpose: CRUD operations for gSites with validation
 // ============================================================
 
 import { Router, Request, Response } from 'express';
-import { createClient } from '@supabase/supabase-js';
-import { validateGSite, validateTheme, ValidationResult } from '../validation/gsite-validator';
-import { verifyGNSSignature } from '../crypto/verify';
+import { validateGSite, validateTheme } from '../lib/gsite-validator';
+import { getSupabase } from '../lib/db';
+import { verifySignature } from '../lib/crypto';
 
 const router = Router();
 
-// Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_KEY!
-);
+// Get Supabase client
+const supabase = getSupabase();
 
 // ============================================================
 // GET /gsite/:identifier - Retrieve a gSite
@@ -45,17 +42,20 @@ router.get('/:identifier', async (req: Request, res: Response) => {
 
     if (error || !data) {
       return res.status(404).json({
-        code: 'NOT_FOUND',
-        message: `gSite not found: ${identifier}`,
+        success: false,
+        error: `gSite not found: ${identifier}`,
       });
     }
 
-    res.json(data.content);
+    res.json({
+      success: true,
+      data: data.content,
+    });
   } catch (err) {
     console.error('❌ Error fetching gSite:', err);
     res.status(500).json({
-      code: 'INTERNAL_ERROR',
-      message: 'Failed to fetch gSite',
+      success: false,
+      error: 'Failed to fetch gSite',
     });
   }
 });
@@ -76,50 +76,62 @@ router.put('/:identifier', async (req: Request, res: Response) => {
     
     if (!validation.valid) {
       return res.status(400).json({
-        code: 'VALIDATION_ERROR',
-        message: 'gSite validation failed',
+        success: false,
+        error: 'gSite validation failed',
         errors: validation.errors,
       });
     }
 
-    // 2. Verify ownership (signature check)
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('GNS-Ed25519 ')) {
-      return res.status(401).json({
-        code: 'UNAUTHORIZED',
-        message: 'Missing or invalid authorization',
-      });
-    }
-
-    // Parse: "GNS-Ed25519 handle:timestamp:signature"
-    const authParts = authHeader.replace('GNS-Ed25519 ', '').split(':');
-    if (authParts.length !== 3) {
-      return res.status(401).json({
-        code: 'UNAUTHORIZED',
-        message: 'Invalid authorization format',
-      });
-    }
-
-    const [handle, timestamp, signature] = authParts;
-
-    // Verify the request is from the owner
-    const isOwner = await verifyOwnership(identifier, handle, timestamp, signature, req);
-    if (!isOwner) {
-      return res.status(403).json({
-        code: 'FORBIDDEN',
-        message: 'Not authorized to update this gSite',
-      });
-    }
-
-    // 3. Verify gSite signature
+    // 2. Verify signature exists
     if (!gsiteData.signature) {
       return res.status(400).json({
-        code: 'MISSING_SIGNATURE',
-        message: 'gSite must be signed',
+        success: false,
+        error: 'gSite must be signed',
       });
     }
 
-    // 4. Get current version
+    // 3. Verify ownership via header
+    const publicKey = req.headers['x-gns-publickey'] as string;
+    const signature = req.headers['x-gns-signature'] as string;
+    const timestamp = req.headers['x-gns-timestamp'] as string;
+
+    if (!publicKey || !signature || !timestamp) {
+      return res.status(401).json({
+        success: false,
+        error: 'Missing authentication headers (X-GNS-PublicKey, X-GNS-Signature, X-GNS-Timestamp)',
+      });
+    }
+
+    // Check timestamp is recent (within 5 minutes)
+    const requestTime = parseInt(timestamp);
+    const now = Date.now();
+    if (Math.abs(now - requestTime) > 5 * 60 * 1000) {
+      return res.status(401).json({
+        success: false,
+        error: 'Request timestamp expired',
+      });
+    }
+
+    // Verify signature
+    const message = `PUT:/gsite/${identifier}:${timestamp}`;
+    const isValidSig = verifySignature(message, signature, publicKey);
+    if (!isValidSig) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid signature',
+      });
+    }
+
+    // 4. Check ownership (handle must belong to this public key)
+    const isOwner = await checkOwnership(identifier, publicKey);
+    if (!isOwner) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to update this gSite',
+      });
+    }
+
+    // 5. Get current version
     const { data: existing } = await supabase
       .from('gsites')
       .select('version')
@@ -130,7 +142,7 @@ router.put('/:identifier', async (req: Request, res: Response) => {
 
     const newVersion = (existing?.version || 0) + 1;
 
-    // 5. Save to Supabase
+    // 6. Save to Supabase
     const { data, error } = await supabase
       .from('gsites')
       .insert({
@@ -146,24 +158,24 @@ router.put('/:identifier', async (req: Request, res: Response) => {
     if (error) {
       console.error('❌ Supabase error:', error);
       return res.status(500).json({
-        code: 'DATABASE_ERROR',
-        message: 'Failed to save gSite',
+        success: false,
+        error: 'Failed to save gSite',
       });
     }
 
-    // 6. Return with warnings if any
+    // 7. Return with warnings if any
     res.json({
       success: true,
       version: newVersion,
       warnings: validation.warnings,
-      gsite: data.content,
+      data: data.content,
     });
 
   } catch (err) {
     console.error('❌ Error updating gSite:', err);
     res.status(500).json({
-      code: 'INTERNAL_ERROR',
-      message: 'Failed to update gSite',
+      success: false,
+      error: 'Failed to update gSite',
     });
   }
 });
@@ -181,6 +193,7 @@ router.post('/:identifier/validate', async (req: Request, res: Response) => {
     const validation = validateGSite(gsiteData);
 
     res.json({
+      success: true,
       valid: validation.valid,
       errors: validation.errors,
       warnings: validation.warnings,
@@ -189,8 +202,36 @@ router.post('/:identifier/validate', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('❌ Error validating gSite:', err);
     res.status(500).json({
-      code: 'INTERNAL_ERROR',
-      message: 'Failed to validate gSite',
+      success: false,
+      error: 'Failed to validate gSite',
+    });
+  }
+});
+
+// ============================================================
+// POST /gsite/theme/validate - Validate a theme
+// ============================================================
+
+router.post('/theme/validate', async (req: Request, res: Response) => {
+  try {
+    const themeData = req.body;
+
+    console.log(`🎨 Validating theme`);
+
+    const validation = validateTheme(themeData);
+
+    res.json({
+      success: true,
+      valid: validation.valid,
+      errors: validation.errors,
+      warnings: validation.warnings,
+    });
+
+  } catch (err) {
+    console.error('❌ Error validating theme:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to validate theme',
     });
   }
 });
@@ -207,89 +248,62 @@ router.get('/:identifier/history', async (req: Request, res: Response) => {
 
     const { data, error } = await supabase
       .from('gsites')
-      .select('version, updated_at, content->signature')
+      .select('version, updated_at')
       .eq('identifier', identifier)
       .order('version', { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (error) {
       return res.status(500).json({
-        code: 'DATABASE_ERROR',
-        message: 'Failed to fetch history',
+        success: false,
+        error: 'Failed to fetch history',
       });
     }
 
     res.json({
+      success: true,
       identifier,
-      versions: data.map(v => ({
+      versions: data?.map(v => ({
         version: v.version,
         updated: v.updated_at,
-        hash: v.signature?.substring(0, 16) + '...',
-      })),
+      })) || [],
     });
 
   } catch (err) {
     console.error('❌ Error fetching history:', err);
     res.status(500).json({
-      code: 'INTERNAL_ERROR',
-      message: 'Failed to fetch history',
+      success: false,
+      error: 'Failed to fetch history',
     });
   }
 });
 
 // ============================================================
-// HELPER: Verify Ownership
+// HELPER: Check Ownership
 // ============================================================
 
-async function verifyOwnership(
-  identifier: string,
-  handle: string,
-  timestamp: string,
-  signature: string,
-  req: Request
-): Promise<boolean> {
-  // 1. Check timestamp is recent (within 5 minutes)
-  const requestTime = parseInt(timestamp);
-  const now = Date.now();
-  if (Math.abs(now - requestTime) > 5 * 60 * 1000) {
-    return false;
-  }
-
-  // 2. Get public key for the handle
-  const { data: identity } = await supabase
-    .from('identities')
-    .select('public_key')
-    .eq('handle', handle.replace('@', ''))
-    .single();
-
-  if (!identity) {
-    return false;
-  }
-
-  // 3. Check if handle owns the identifier
-  // For @handle: handle must match
-  // For namespace@: handle must be admin
+async function checkOwnership(identifier: string, publicKey: string): Promise<boolean> {
+  // For @handle: check aliases table (your existing table)
   if (identifier.startsWith('@')) {
-    if (`@${handle}` !== identifier && handle !== identifier) {
-      return false;
-    }
-  } else {
-    // Check namespace admin
-    const namespace = identifier.replace('@', '');
-    const { data: ns } = await supabase
-      .from('namespaces')
-      .select('admin_handle')
-      .eq('namespace', namespace)
+    const handle = identifier.replace('@', '');
+    const { data } = await supabase
+      .from('aliases')
+      .select('pk_root')
+      .eq('handle', handle)
       .single();
     
-    if (!ns || ns.admin_handle !== handle) {
-      return false;
-    }
+    return data?.pk_root === publicKey;
   }
-
-  // 4. Verify signature
-  const message = `PUT:/gsite/${identifier}:${timestamp}`;
-  return verifyGNSSignature(message, signature, identity.public_key);
+  
+  // For namespace@: check namespaces table
+  const namespace = identifier.replace('@', '');
+  const { data } = await supabase
+    .from('namespaces')
+    .select('admin_pk')
+    .eq('namespace', namespace)
+    .single();
+  
+  return data?.admin_pk === publicKey;
 }
 
 export default router;

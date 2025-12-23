@@ -1,14 +1,14 @@
 // ============================================================
 // GNS VALIDATION SERVICE
 // ============================================================
-// Location: server/src/validation/gsite-validator.ts
+// Location: server/src/lib/gsite-validator.ts
 // Purpose: Validate gSites and themes against JSON schemas
 // ============================================================
 
 import Ajv, { ValidateFunction, ErrorObject } from 'ajv';
 import addFormats from 'ajv-formats';
 
-// Import schemas (copy these to your server/schemas/ folder)
+// Import schemas
 import gsiteSchema from '../schemas/gsite.schema.json';
 import themeSchema from '../schemas/theme.schema.json';
 
@@ -58,9 +58,9 @@ export class GSiteValidator {
   constructor() {
     // Initialize AJV with formats support
     this.ajv = new Ajv({
-      allErrors: true,        // Report all errors, not just first
-      verbose: true,          // Include schema and data in errors
-      strict: false,          // Allow additional keywords
+      allErrors: true,
+      verbose: true,
+      strict: false,
     });
     
     // Add format validators (date-time, uri, email, etc.)
@@ -79,7 +79,6 @@ export class GSiteValidator {
     const valid = this.gsiteValidate(data);
     
     if (valid) {
-      // Run additional business logic validations
       const warnings = this.checkGSiteWarnings(data as Record<string, unknown>);
       return { valid: true, errors: [], warnings };
     }
@@ -111,50 +110,12 @@ export class GSiteValidator {
   }
 
   // ----------------------------------------------------------
-  // VALIDATE PARTIAL gSITE (for updates)
-  // ----------------------------------------------------------
-  
-  validateGSitePartial(data: unknown, existingGSite: Record<string, unknown>): ValidationResult {
-    // Merge with existing data for full validation
-    const merged = { ...existingGSite, ...data as Record<string, unknown> };
-    return this.validateGSite(merged);
-  }
-
-  // ----------------------------------------------------------
-  // CHECK SPECIFIC ENTITY TYPE
-  // ----------------------------------------------------------
-  
-  validateGSiteType(data: unknown, expectedType: GSiteType): ValidationResult {
-    const result = this.validateGSite(data);
-    
-    if (!result.valid) {
-      return result;
-    }
-
-    const gsite = data as Record<string, unknown>;
-    if (gsite['@type'] !== expectedType) {
-      return {
-        valid: false,
-        errors: [{
-          path: '@type',
-          message: `Expected type "${expectedType}" but got "${gsite['@type']}"`,
-          keyword: 'const',
-        }],
-        warnings: [],
-      };
-    }
-
-    return result;
-  }
-
-  // ----------------------------------------------------------
   // BUSINESS LOGIC WARNINGS
   // ----------------------------------------------------------
   
   private checkGSiteWarnings(data: Record<string, unknown>): ValidationWarning[] {
     const warnings: ValidationWarning[] = [];
 
-    // Check for missing recommended fields
     if (!data.tagline) {
       warnings.push({
         path: 'tagline',
@@ -169,7 +130,6 @@ export class GSiteValidator {
       });
     }
 
-    // Type-specific warnings
     const type = data['@type'] as string;
     
     if (type === 'Business') {
@@ -211,17 +171,6 @@ export class GSiteValidator {
 
   private checkThemeWarnings(data: Record<string, unknown>): ValidationWarning[] {
     const warnings: ValidationWarning[] = [];
-
-    // Check color contrast (simplified)
-    const tokens = data.tokens as Record<string, unknown> | undefined;
-    if (tokens?.colors) {
-      const colors = tokens.colors as Record<string, string>;
-      // In a real implementation, calculate actual contrast ratios
-      if (colors.primary && colors.onPrimary) {
-        // TODO: Implement WCAG contrast checking
-        // For now, just a placeholder warning
-      }
-    }
 
     if (!data.preview) {
       warnings.push({
