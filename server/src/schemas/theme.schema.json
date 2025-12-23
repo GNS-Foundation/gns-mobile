@@ -1,0 +1,344 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schema.gns.network/v1/theme.schema.json",
+  "title": "PANTHERA Theme Schema",
+  "description": "JSON Schema for validating PANTHERA browser themes",
+  "version": "1.0.0",
+  
+  "type": "object",
+  "required": ["id", "name", "version", "entityTypes", "tokens"],
+  
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique theme identifier",
+      "pattern": "^[a-z0-9-]+$",
+      "minLength": 3,
+      "maxLength": 50
+    },
+    
+    "name": {
+      "type": "string",
+      "description": "Display name",
+      "maxLength": 100
+    },
+    
+    "description": {
+      "type": "string",
+      "description": "Theme description",
+      "maxLength": 500
+    },
+    
+    "version": {
+      "type": "string",
+      "description": "Semantic version",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    
+    "author": {
+      "type": "string",
+      "description": "Author @handle or organization"
+    },
+    
+    "entityTypes": {
+      "type": "array",
+      "description": "Entity types this theme supports",
+      "items": {
+        "type": "string",
+        "enum": ["Person", "Business", "Store", "Service", "Publication", "Community", "Organization", "Event", "Product", "Place"]
+      },
+      "minItems": 1
+    },
+    
+    "categories": {
+      "type": "array",
+      "description": "Business/service categories this theme is designed for",
+      "items": { "type": "string" }
+    },
+    
+    "tokens": {
+      "type": "object",
+      "required": ["colors"],
+      "properties": {
+        "colors": {
+          "type": "object",
+          "required": ["primary", "surface", "background", "onPrimary", "onSurface"],
+          "properties": {
+            "primary": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "primaryVariant": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "secondary": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "secondaryVariant": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "surface": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "surfaceVariant": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "background": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "onPrimary": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "onSecondary": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "onSurface": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "onBackground": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "error": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "success": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "warning": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "info": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "divider": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "disabled": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+          }
+        },
+        "typography": {
+          "type": "object",
+          "properties": {
+            "fontFamily": {
+              "type": "object",
+              "properties": {
+                "primary": {
+                  "type": "string",
+                  "enum": ["Inter", "Roboto", "Open Sans", "Lato", "Montserrat", "Poppins",
+                           "Merriweather", "Playfair Display", "Lora", "Source Serif",
+                           "JetBrains Mono", "Fira Code", "Source Code Pro", "system-ui"]
+                },
+                "secondary": {
+                  "type": "string",
+                  "enum": ["Inter", "Roboto", "Open Sans", "Lato", "Montserrat", "Poppins",
+                           "Merriweather", "Playfair Display", "Lora", "Source Serif",
+                           "JetBrains Mono", "Fira Code", "Source Code Pro", "system-ui"]
+                },
+                "mono": {
+                  "type": "string",
+                  "enum": ["JetBrains Mono", "Fira Code", "Source Code Pro"]
+                }
+              }
+            },
+            "fontSize": {
+              "type": "object",
+              "properties": {
+                "xs": { "type": "integer", "minimum": 10, "maximum": 14 },
+                "sm": { "type": "integer", "minimum": 12, "maximum": 16 },
+                "base": { "type": "integer", "minimum": 14, "maximum": 18 },
+                "lg": { "type": "integer", "minimum": 16, "maximum": 22 },
+                "xl": { "type": "integer", "minimum": 18, "maximum": 26 },
+                "2xl": { "type": "integer", "minimum": 22, "maximum": 32 },
+                "3xl": { "type": "integer", "minimum": 26, "maximum": 40 },
+                "4xl": { "type": "integer", "minimum": 32, "maximum": 48 },
+                "5xl": { "type": "integer", "minimum": 40, "maximum": 64 }
+              }
+            },
+            "fontWeight": {
+              "type": "object",
+              "properties": {
+                "normal": { "type": "integer", "enum": [400] },
+                "medium": { "type": "integer", "enum": [500] },
+                "semibold": { "type": "integer", "enum": [600] },
+                "bold": { "type": "integer", "enum": [700] }
+              }
+            },
+            "lineHeight": {
+              "type": "object",
+              "properties": {
+                "tight": { "type": "number", "minimum": 1, "maximum": 1.5 },
+                "normal": { "type": "number", "minimum": 1.25, "maximum": 1.75 },
+                "relaxed": { "type": "number", "minimum": 1.5, "maximum": 2 }
+              }
+            }
+          }
+        },
+        "spacing": {
+          "type": "object",
+          "properties": {
+            "0": { "const": 0 },
+            "1": { "type": "integer", "enum": [4] },
+            "2": { "type": "integer", "enum": [8] },
+            "3": { "type": "integer", "enum": [12] },
+            "4": { "type": "integer", "enum": [16] },
+            "5": { "type": "integer", "enum": [20] },
+            "6": { "type": "integer", "enum": [24] },
+            "8": { "type": "integer", "enum": [32] },
+            "10": { "type": "integer", "enum": [40] },
+            "12": { "type": "integer", "enum": [48] },
+            "16": { "type": "integer", "enum": [64] }
+          }
+        },
+        "borders": {
+          "type": "object",
+          "properties": {
+            "radius": {
+              "type": "object",
+              "properties": {
+                "none": { "const": 0 },
+                "sm": { "type": "integer", "minimum": 2, "maximum": 6 },
+                "md": { "type": "integer", "minimum": 6, "maximum": 12 },
+                "lg": { "type": "integer", "minimum": 10, "maximum": 16 },
+                "xl": { "type": "integer", "minimum": 14, "maximum": 24 },
+                "2xl": { "type": "integer", "minimum": 20, "maximum": 32 },
+                "full": { "const": 9999 },
+                "default": { "type": "integer", "minimum": 0, "maximum": 32 }
+              }
+            },
+            "width": {
+              "type": "object",
+              "properties": {
+                "thin": { "type": "integer", "enum": [1] },
+                "medium": { "type": "integer", "enum": [2] },
+                "thick": { "type": "integer", "enum": [4] }
+              }
+            }
+          }
+        },
+        "shadows": {
+          "type": "object",
+          "properties": {
+            "none": { "const": "none" },
+            "sm": { "type": "string" },
+            "md": { "type": "string" },
+            "lg": { "type": "string" },
+            "xl": { "type": "string" }
+          }
+        }
+      }
+    },
+    
+    "components": {
+      "type": "object",
+      "properties": {
+        "card": {
+          "type": "object",
+          "properties": {
+            "variant": { "type": "string", "enum": ["elevated", "outlined", "filled"] },
+            "shadow": { "type": "string", "enum": ["none", "sm", "md", "lg", "xl"] },
+            "borderRadius": { "type": "string", "enum": ["none", "sm", "md", "lg", "xl", "2xl"] },
+            "padding": { "type": "string", "enum": ["none", "sm", "md", "lg"] }
+          }
+        },
+        "button": {
+          "type": "object",
+          "properties": {
+            "borderRadius": { "type": "string", "enum": ["none", "sm", "md", "lg", "full"] },
+            "size": { "type": "string", "enum": ["sm", "md", "lg"] },
+            "uppercase": { "type": "boolean" }
+          }
+        },
+        "input": {
+          "type": "object",
+          "properties": {
+            "variant": { "type": "string", "enum": ["outlined", "filled", "underlined"] },
+            "borderRadius": { "type": "string", "enum": ["none", "sm", "md", "lg"] }
+          }
+        },
+        "avatar": {
+          "type": "object",
+          "properties": {
+            "shape": { "type": "string", "enum": ["circle", "rounded", "square"] },
+            "border": { "type": "boolean" }
+          }
+        },
+        "badge": {
+          "type": "object",
+          "properties": {
+            "variant": { "type": "string", "enum": ["filled", "outlined", "soft"] },
+            "borderRadius": { "type": "string", "enum": ["none", "sm", "md", "full"] }
+          }
+        },
+        "header": {
+          "type": "object",
+          "properties": {
+            "style": { "type": "string", "enum": ["overlay", "separate", "integrated"] },
+            "blur": { "type": "boolean" }
+          }
+        },
+        "section": {
+          "type": "object",
+          "properties": {
+            "divider": { "type": "string", "enum": ["line", "space", "none"] },
+            "titleSize": { "type": "string", "enum": ["sm", "md", "lg"] }
+          }
+        },
+        "actionBar": {
+          "type": "object",
+          "properties": {
+            "position": { "type": "string", "enum": ["inline", "sticky", "floating"] },
+            "style": { "type": "string", "enum": ["buttons", "icons", "pills"] }
+          }
+        },
+        "trustBadge": {
+          "type": "object",
+          "properties": {
+            "style": { "type": "string", "enum": ["minimal", "detailed", "prominent"] },
+            "position": { "type": "string", "enum": ["header", "inline", "floating"] }
+          }
+        }
+      }
+    },
+    
+    "layout": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string",
+          "enum": ["profile", "storefront", "ecommerce", "service", "publication", "community", "organization", "event", "product", "place"]
+        },
+        "sections": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "coverHeight": { "type": "string", "enum": ["none", "small", "medium", "large", "full"] },
+        "avatarSize": { "type": "string", "enum": ["sm", "md", "lg", "xl"] },
+        "avatarPosition": { "type": "string", "enum": ["left", "center", "overlap"] },
+        "contentWidth": { "type": "string", "enum": ["narrow", "medium", "wide", "full"] },
+        "menuLayout": { "type": "string", "enum": ["grid", "list", "cards"] },
+        "productLayout": { "type": "string", "enum": ["grid", "list", "masonry"] },
+        "articleLayout": { "type": "string", "enum": ["cards", "list", "magazine"] },
+        "gridColumns": {
+          "type": "object",
+          "properties": {
+            "mobile": { "type": "integer", "minimum": 1, "maximum": 2 },
+            "tablet": { "type": "integer", "minimum": 2, "maximum": 4 },
+            "desktop": { "type": "integer", "minimum": 2, "maximum": 6 }
+          }
+        }
+      }
+    },
+    
+    "darkMode": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "colors": {
+          "type": "object",
+          "properties": {
+            "surface": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "surfaceVariant": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "background": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "onSurface": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "onBackground": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "divider": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+          }
+        }
+      }
+    },
+    
+    "preview": {
+      "type": "object",
+      "properties": {
+        "thumbnail": { "type": "string", "format": "uri" },
+        "screenshots": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri" }
+        },
+        "demoUrl": { "type": "string", "format": "uri" }
+      }
+    },
+    
+    "pricing": {
+      "type": "object",
+      "properties": {
+        "tier": { "type": "string", "enum": ["free", "standard", "premium"] },
+        "price": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string", "enum": ["USD", "GNS"] }
+      }
+    },
+    
+    "signature": {
+      "type": "string",
+      "description": "Ed25519 signature by theme author",
+      "pattern": "^ed25519:[A-Za-z0-9+/=]+$"
+    }
+  }
+}

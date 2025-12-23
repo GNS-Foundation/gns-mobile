@@ -20,9 +20,10 @@ import handlesRouter from './api/handles';
 import identitiesRouter from './api/identities';
 import paymentsRouter from './api/payments';
 import geoauthRouter from './api/geoauth';
-import webRouter from './api/web'; 
+import webRouter from './api/web';
 import dixRouter from './api/dix';
 import emailRouter, { initializeEmailGateway } from './api/email';  // 📧 NEW
+import gsiteRouter from './api/gsite';  // 🐆 gSite CRUD & Validation
 
 // Services
 import echoBot from './services/echo_bot';
@@ -56,11 +57,11 @@ app.use(cors({
   origin: corsOrigins.includes('*') ? '*' : corsOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
-    'Content-Type', 
-    'Authorization', 
-    'X-GNS-Identity', 
+    'Content-Type',
+    'Authorization',
+    'X-GNS-Identity',
     'X-GNS-PublicKey',
-    'X-GNS-Signature', 
+    'X-GNS-Signature',
     'X-GNS-Timestamp',
     'X-Webhook-Secret',  // 📧 NEW - for email webhook
   ],
@@ -81,7 +82,7 @@ if (NODE_ENV !== 'test') {
 
 app.get('/', async (req: Request, res: Response) => {
   const dbHealthy = await healthCheck();
-  
+
   res.json({
     name: 'GNS Node',
     version: '1.3.0',  // 📧 Version bump
@@ -92,18 +93,20 @@ app.get('/', async (req: Request, res: Response) => {
       websocket: true,
       envelope_messaging: true,
       email_gateway: true,  // 📧 NEW
+      gsite_validation: true,  // 🐆 NEW
       echo_bot: echoBot.getEchoBotStatus().running,
     },
     endpoints: {
       records: '/records/:pk',
       aliases: '/aliases/:handle',
       handles: '/handles/:handle',
-      identities: '/identities/:publicKey', 
+      identities: '/identities/:publicKey',
       epochs: '/epochs/:pk',
       messages: '/messages',
       messages_ws: '/ws',
       sync: '/sync',
       email: '/email/inbound',  // 📧 NEW
+      gsite: '/gsite/:identifier',  // 🐆 NEW
     },
     system_handles: {
       echo: `@echo (${echoBot.getEchoPublicKey().substring(0, 16)}...)`,
@@ -113,14 +116,14 @@ app.get('/', async (req: Request, res: Response) => {
 
 app.get('/health', async (req: Request, res: Response) => {
   const dbHealthy = await healthCheck();
-  
+
   if (!dbHealthy) {
     return res.status(503).json({
       status: 'unhealthy',
       database: false,
     });
   }
-  
+
   res.json({
     status: 'healthy',
     database: true,
@@ -150,6 +153,7 @@ app.use('/search', webRouter);  // For /search endpoint
 app.use('/stats', webRouter);   // For /stats endpoint
 app.use('/web/dix', dixRouter);
 app.use('/email', emailRouter);  // 📧 NEW - Email Gateway
+app.use('/gsite', gsiteRouter);  // 🐆 gSite CRUD & Validation
 
 // ===========================================
 // Auth Challenge Endpoint
@@ -161,27 +165,27 @@ const challenges = new Map<string, { nonce: string; timestamp: string; expires: 
 
 app.get('/auth/challenge', (req: Request, res: Response) => {
   const pk = req.query.pk as string;
-  
+
   if (!pk || pk.length !== 64) {
     return res.status(400).json({
       success: false,
       error: 'Invalid public key',
     });
   }
-  
+
   const nonce = generateNonce();
   const timestamp = new Date().toISOString();
   const expires = Date.now() + 5 * 60 * 1000;
-  
+
   challenges.set(pk.toLowerCase(), { nonce, timestamp, expires });
-  
+
   // Cleanup old challenges
   for (const [key, value] of challenges.entries()) {
     if (value.expires < Date.now()) {
       challenges.delete(key);
     }
   }
-  
+
   res.json({
     success: true,
     data: {
@@ -210,7 +214,7 @@ app.use((req: Request, res: Response) => {
 
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   console.error('Unhandled error:', err);
-  
+
   res.status(500).json({
     success: false,
     error: NODE_ENV === 'production' ? 'Internal server error' : err.message,
@@ -224,42 +228,42 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 async function start() {
   // Verify database connection
   const dbHealthy = await healthCheck();
-  
+
   if (!dbHealthy) {
     console.error('❌ Database connection failed!');
     console.error('Check SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables.');
     process.exit(1);
   }
-  
+
   console.log('✅ Database connected');
-  
+
   // ===========================================
   // CREATE HTTP SERVER (for WebSocket support)
   // ===========================================
   const server = createServer(app);
-  
+
   // ===========================================
   // SETUP WEBSOCKET
   // ===========================================
   setupWebSocket(server);
   console.log('✅ WebSocket server initialized');
-  
+
   // ===========================================
   // INITIALIZE @echo BOT
   // ===========================================
   await echoBot.initializeEchoBot();
-  
+
   // Register @echo handle in database (optional, non-fatal if fails)
   try {
     await echoBot.registerHandle();
   } catch (e) {
     console.warn('⚠️ Could not register @echo handle (non-fatal):', e);
   }
-  
+
   // Start the bot (begins polling for messages)
   echoBot.startPolling();
   console.log('✅ @echo bot started');
-  
+
   // ===========================================
   // INITIALIZE EMAIL GATEWAY  📧 NEW
   // ===========================================
@@ -269,7 +273,7 @@ async function start() {
   } catch (e) {
     console.warn('⚠️ Email gateway initialization failed (non-fatal):', e);
   }
-  
+
   // ===========================================
   // START LISTENING
   // ===========================================
