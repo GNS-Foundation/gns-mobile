@@ -24,6 +24,7 @@ import webRouter from './api/web';
 import dixRouter from './api/dix';
 import emailRouter, { initializeEmailGateway } from './api/email';  // 📧 NEW
 import gsiteRouter from './api/gsite';  // 🐆 gSite CRUD & Validation
+import orgRouter from './api/org';  // 🏢 Organization Registration
 
 // Services
 import echoBot from './services/echo_bot';
@@ -149,11 +150,12 @@ app.use('/identities', identitiesRouter);
 app.use('/payments', paymentsRouter);
 app.use('/auth', geoauthRouter);
 app.use('/web', webRouter);
-app.use('/search', webRouter);  // For /search endpoint
-app.use('/stats', webRouter);   // For /stats endpoint
+app.use('/search', webRouter);
+app.use('/stats', webRouter);
 app.use('/web/dix', dixRouter);
-app.use('/email', emailRouter);  // 📧 NEW - Email Gateway
-app.use('/gsite', gsiteRouter);  // 🐆 gSite CRUD & Validation
+app.use('/email', emailRouter);
+app.use('/gsite', gsiteRouter);
+app.use('/org', orgRouter);
 
 // ===========================================
 // Auth Challenge Endpoint

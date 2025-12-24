@@ -4,7 +4,7 @@
 // ===========================================
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { 
+import {
   DbRecord, DbAlias, DbEpoch, DbMessage,
   GnsRecord, PoTProof, EpochHeader, SyncState,
   DbPaymentIntent, DbPaymentAck, DbGeoAuthSession
@@ -20,11 +20,11 @@ export function getSupabase(): SupabaseClient {
   if (!supabase) {
     const url = process.env.SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_KEY;
-    
+
     if (!url || !key) {
       throw new Error('SUPABASE_URL and SUPABASE_SERVICE_KEY must be set');
     }
-    
+
     supabase = createClient(url, key, {
       auth: {
         autoRefreshToken: false,
@@ -32,7 +32,7 @@ export function getSupabase(): SupabaseClient {
       },
     });
   }
-  
+
   return supabase;
 }
 
@@ -46,12 +46,12 @@ export async function getRecord(pkRoot: string): Promise<DbRecord | null> {
     .select('*')
     .eq('pk_root', pkRoot.toLowerCase())
     .single();
-  
+
   if (error && error.code !== 'PGRST116') { // PGRST116 = not found
     console.error('Error fetching record:', error);
     throw error;
   }
-  
+
   return data as DbRecord | null;
 }
 
@@ -69,14 +69,14 @@ export async function getIdentity(pkRoot: string): Promise<{
     .select('pk_root, encryption_key, handle')
     .eq('pk_root', pkRoot.toLowerCase())
     .single();
-  
+
   if (error && error.code !== 'PGRST116') {
     console.error('Error fetching identity:', error);
     throw error;
   }
-  
+
   if (!data) return null;
-  
+
   return {
     public_key: data.pk_root,
     encryption_key: data.encryption_key,
@@ -105,12 +105,12 @@ export async function upsertRecord(
     })
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error upserting record:', error);
     throw error;
   }
-  
+
   return data as DbRecord;
 }
 
@@ -121,12 +121,12 @@ export async function getRecordsSince(since: string, limit = 100): Promise<DbRec
     .gt('updated_at', since)
     .order('updated_at', { ascending: true })
     .limit(limit);
-  
+
   if (error) {
     console.error('Error fetching records since:', error);
     throw error;
   }
-  
+
   return data as DbRecord[];
 }
 
@@ -135,12 +135,12 @@ export async function deleteRecord(pkRoot: string): Promise<boolean> {
     .from('records')
     .delete()
     .eq('pk_root', pkRoot.toLowerCase());
-  
+
   if (error) {
     console.error('Error deleting record:', error);
     throw error;
   }
-  
+
   return true;
 }
 
@@ -154,12 +154,12 @@ export async function getAlias(handle: string): Promise<DbAlias | null> {
     .select('*')
     .eq('handle', handle.toLowerCase())
     .single();
-  
+
   if (error && error.code !== 'PGRST116') {
     console.error('Error fetching alias:', error);
     throw error;
   }
-  
+
   return data as DbAlias | null;
 }
 
@@ -169,12 +169,12 @@ export async function getAliasByPk(pkRoot: string): Promise<DbAlias | null> {
     .select('*')
     .eq('pk_root', pkRoot.toLowerCase())
     .single();
-  
+
   if (error && error.code !== 'PGRST116') {
     console.error('Error fetching alias by pk:', error);
     throw error;
   }
-  
+
   return data as DbAlias | null;
 }
 
@@ -195,18 +195,18 @@ export async function createAlias(
     })
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error creating alias:', error);
     throw error;
   }
-  
+
   // Update the record's handle field
   await getSupabase()
     .from('records')
     .update({ handle: handle.toLowerCase() })
     .eq('pk_root', pkRoot.toLowerCase());
-  
+
   return data as DbAlias;
 }
 
@@ -214,19 +214,19 @@ export async function isHandleAvailable(handle: string): Promise<boolean> {
   // Check aliases table
   const alias = await getAlias(handle);
   if (alias) return false;
-  
+
   // Check reserved handles table
   const { data, error } = await getSupabase()
     .from('reserved_handles')
     .select('handle')
     .eq('handle', handle.toLowerCase())
     .single();
-  
+
   if (error && error.code !== 'PGRST116') {
     console.error('Error checking reserved handles:', error);
     throw error;
   }
-  
+
   return !data;
 }
 
@@ -237,12 +237,12 @@ export async function getAliasesSince(since: string, limit = 100): Promise<DbAli
     .gt('created_at', since)
     .order('created_at', { ascending: true })
     .limit(limit);
-  
+
   if (error) {
     console.error('Error fetching aliases since:', error);
     throw error;
   }
-  
+
   return data as DbAlias[];
 }
 
@@ -285,12 +285,12 @@ export async function createSystemAlias(
     })
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error creating system alias:', error);
     throw error;
   }
-  
+
   return data as DbAlias;
 }
 
@@ -302,12 +302,12 @@ export async function getSystemAliases(): Promise<DbAlias[]> {
     .from('aliases')
     .select('*')
     .eq('is_system', true);
-  
+
   if (error) {
     console.error('Error fetching system aliases:', error);
     throw error;
   }
-  
+
   return data as DbAlias[] || [];
 }
 
@@ -322,14 +322,14 @@ export async function getSystemAliases(): Promise<DbAlias[]> {
 export async function resolveHandleToPublicKey(handle: string): Promise<string | null> {
   // Normalize handle (remove @ if present)
   const normalizedHandle = handle.toLowerCase().replace(/^@/, '');
-  
+
   // Look up in aliases
   const alias = await getAlias(normalizedHandle);
-  
+
   if (alias) {
     return alias.pk_root;
   }
-  
+
   return null;
 }
 
@@ -339,11 +339,11 @@ export async function resolveHandleToPublicKey(handle: string): Promise<string |
  */
 export async function resolvePublicKeyToHandle(pkRoot: string): Promise<string | null> {
   const alias = await getAliasByPk(pkRoot.toLowerCase());
-  
+
   if (alias) {
     return `@${alias.handle}`;
   }
-  
+
   return null;
 }
 
@@ -360,14 +360,14 @@ export async function reserveHandle(
   if (!available) {
     return { reserved: false, error: 'Handle not available' };
   }
-  
+
   // Check if pk already has a reservation
   const { data: existing } = await getSupabase()
     .from('reserved_handles')
     .select('*')
     .eq('pk_root', pkRoot.toLowerCase())
     .single();
-  
+
   if (existing) {
     // Delete old reservation
     await getSupabase()
@@ -375,10 +375,10 @@ export async function reserveHandle(
       .delete()
       .eq('pk_root', pkRoot.toLowerCase());
   }
-  
+
   // Create reservation
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  
+
   const { error } = await getSupabase()
     .from('reserved_handles')
     .insert({
@@ -386,12 +386,12 @@ export async function reserveHandle(
       pk_root: pkRoot.toLowerCase(),
       expires_at: expiresAt,
     });
-  
+
   if (error) {
     console.error('Error reserving handle:', error);
     return { reserved: false, error: error.message };
   }
-  
+
   return { reserved: true, expires_at: expiresAt };
 }
 
@@ -407,12 +407,12 @@ export async function getReservation(handle: string): Promise<{
     .eq('handle', handle.toLowerCase())
     .or(`expires_at.is.null,expires_at.gt.${now}`)
     .single();
-  
+
   if (error && error.code !== 'PGRST116') {
     console.error('Error fetching reservation:', error);
     throw error;
   }
-  
+
   return data;
 }
 
@@ -426,12 +426,12 @@ export async function getEpochs(pkRoot: string): Promise<DbEpoch[]> {
     .select('*')
     .eq('pk_root', pkRoot.toLowerCase())
     .order('epoch_index', { ascending: true });
-  
+
   if (error) {
     console.error('Error fetching epochs:', error);
     throw error;
   }
-  
+
   return data as DbEpoch[];
 }
 
@@ -442,12 +442,12 @@ export async function getEpoch(pkRoot: string, epochIndex: number): Promise<DbEp
     .eq('pk_root', pkRoot.toLowerCase())
     .eq('epoch_index', epochIndex)
     .single();
-  
+
   if (error && error.code !== 'PGRST116') {
     console.error('Error fetching epoch:', error);
     throw error;
   }
-  
+
   return data as DbEpoch | null;
 }
 
@@ -471,12 +471,12 @@ export async function createEpoch(
     })
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error creating epoch:', error);
     throw error;
   }
-  
+
   return data as DbEpoch;
 }
 
@@ -487,12 +487,12 @@ export async function getEpochsSince(since: string, limit = 100): Promise<DbEpoc
     .gt('published_at', since)
     .order('published_at', { ascending: true })
     .limit(limit);
-  
+
   if (error) {
     console.error('Error fetching epochs since:', error);
     throw error;
   }
-  
+
   return data as DbEpoch[];
 }
 
@@ -518,12 +518,12 @@ export async function createMessage(
     })
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error creating message:', error);
     throw error;
   }
-  
+
   return data as DbMessage;
 }
 
@@ -535,12 +535,12 @@ export async function getInbox(pkRoot: string, limit = 50): Promise<DbMessage[]>
     .is('delivered_at', null)
     .order('created_at', { ascending: true })
     .limit(limit);
-  
+
   if (error) {
     console.error('Error fetching inbox:', error);
     throw error;
   }
-  
+
   return data as DbMessage[];
 }
 
@@ -549,7 +549,7 @@ export async function markMessageDelivered(messageId: string): Promise<void> {
     .from('messages')
     .update({ delivered_at: new Date().toISOString() })
     .eq('id', messageId);
-  
+
   if (error) {
     console.error('Error marking message delivered:', error);
     throw error;
@@ -561,7 +561,7 @@ export async function deleteMessage(messageId: string): Promise<void> {
     .from('messages')
     .delete()
     .eq('id', messageId);
-  
+
   if (error) {
     console.error('Error deleting message:', error);
     throw error;
@@ -578,12 +578,12 @@ export async function getSyncState(peerId: string): Promise<SyncState | null> {
     .select('*')
     .eq('peer_id', peerId)
     .single();
-  
+
   if (error && error.code !== 'PGRST116') {
     console.error('Error fetching sync state:', error);
     throw error;
   }
-  
+
   return data as SyncState | null;
 }
 
@@ -591,7 +591,7 @@ export async function upsertSyncState(state: Partial<SyncState> & { peer_id: str
   const { error } = await getSupabase()
     .from('sync_state')
     .upsert(state, { onConflict: 'peer_id' });
-  
+
   if (error) {
     console.error('Error upserting sync state:', error);
     throw error;
@@ -603,12 +603,12 @@ export async function getAllPeers(): Promise<SyncState[]> {
     .from('sync_state')
     .select('*')
     .eq('status', 'active');
-  
+
   if (error) {
     console.error('Error fetching peers:', error);
     throw error;
   }
-  
+
   return data as SyncState[];
 }
 
@@ -622,7 +622,7 @@ export async function healthCheck(): Promise<boolean> {
       .from('records')
       .select('pk_root')
       .limit(1);
-    
+
     return !error;
   } catch {
     return false;
@@ -649,7 +649,7 @@ export async function createEnvelopeMessage(
     console.warn('⚠️ encryptedPayload was an object, converting to string');
     payloadString = JSON.stringify(payloadString);
   }
-  
+
   const { data, error } = await getSupabase()
     .from('messages')
     .insert({
@@ -661,7 +661,7 @@ export async function createEnvelopeMessage(
       thread_id: threadId || envelope.threadId || null,
       status: 'pending',
       relay_id: process.env.NODE_ID,
-      expires_at: null, 
+      expires_at: null,
     })
     .select()
     .single();
@@ -710,7 +710,7 @@ export async function acknowledgeMessages(
   messageIds: string[]
 ): Promise<number> {
   if (messageIds.length === 0) return 0;
-  
+
   try {
     const { data, error } = await getSupabase()
       .rpc('acknowledge_messages_text', {
@@ -722,7 +722,7 @@ export async function acknowledgeMessages(
       console.error('ACK error:', error);
       return 0;
     }
-    
+
     console.log(`✅ Acknowledged ${data} messages`);
     return data || 0;
   } catch (err) {
@@ -740,7 +740,7 @@ export async function markMessagesRead(
   messageIds: string[]
 ): Promise<number> {
   // ✅ FIXED: Use .in() instead of massive OR chain
-  
+
   const { data, error } = await getSupabase()
     .from('messages')
     .update({ status: 'read' })
@@ -907,7 +907,7 @@ export async function getMultiplePresence(publicKeys: string[]): Promise<Array<{
   lastSeen: string | null;
 }>> {
   const normalizedKeys = publicKeys.map(k => k.toLowerCase());
-  
+
   const { data, error } = await getSupabase()
     .from('presence')
     .select('*')
@@ -938,12 +938,12 @@ export async function getAllRecords(): Promise<DbRecord[]> {
     .from('records')
     .select('*')
     .order('created_at', { ascending: true });
-  
+
   if (error) {
     console.error('Error fetching all records:', error);
     throw error;
   }
-  
+
   return data as DbRecord[];
 }
 
@@ -957,12 +957,12 @@ export async function updateEncryptionKey(
 ): Promise<void> {
   const { error } = await getSupabase()
     .from('records')
-    .update({ 
+    .update({
       encryption_key: encryptionKey,
       updated_at: new Date().toISOString(),
     })
     .eq('pk_root', pkRoot.toLowerCase());
-  
+
   if (error) {
     console.error('Error updating encryption key:', error);
     throw error;
@@ -975,7 +975,7 @@ export async function updateEncryptionKey(
  */
 export async function backupEncryptionKeys(): Promise<void> {
   const { error } = await getSupabase().rpc('backup_encryption_keys');
-  
+
   if (error) {
     console.error('Error backing up encryption keys:', error);
     throw error;
@@ -1530,7 +1530,7 @@ export async function cleanupExpiredMessages(): Promise<number> {
  */
 export async function cleanupTypingStatus(): Promise<void> {
   const thirtySecondsAgo = new Date(Date.now() - 30000).toISOString();
-  
+
   await getSupabase()
     .from('typing_status')
     .delete()
@@ -1542,7 +1542,7 @@ export async function cleanupTypingStatus(): Promise<void> {
  */
 export async function cleanupStalePresence(): Promise<void> {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-  
+
   await getSupabase()
     .from('presence')
     .update({ status: 'offline' })
@@ -1563,12 +1563,12 @@ export async function searchAliases(query: string, limit = 20): Promise<DbAlias[
     .select('*')
     .ilike('handle', `${query}%`)
     .limit(limit);
-  
+
   if (error) {
     console.error('Error searching aliases:', error);
     throw error;
   }
-  
+
   return data as DbAlias[];
 }
 
@@ -1581,11 +1581,156 @@ export async function getTopIdentities(limit = 10): Promise<DbRecord[]> {
     .select('*')
     .order('trust_score', { ascending: false })
     .limit(limit);
-  
+
   if (error) {
     console.error('Error getting top identities:', error);
     throw error;
   }
-  
+
   return data as DbRecord[];
+}
+
+// ===========================================
+// ORGANIZATION REGISTRATION
+// ===========================================
+
+/**
+ * Create a new organization registration
+ */
+export async function createOrgRegistration(data: {
+  id: string;
+  namespace: string;
+  organization_name: string;
+  email: string;
+  website: string;
+  domain: string;
+  description: string | null;
+  tier: string;
+  verification_code: string;
+}) {
+  const { data: result, error } = await getSupabase()
+    .from('org_registrations')
+    .insert({
+      id: data.id,
+      namespace: data.namespace,
+      organization_name: data.organization_name,
+      email: data.email,
+      website: data.website,
+      domain: data.domain,
+      description: data.description,
+      tier: data.tier,
+      verification_code: data.verification_code,
+      status: 'pending',
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return result;
+}
+
+/**
+ * Get organization registration by ID
+ */
+export async function getOrgRegistration(id: string) {
+  const { data, error } = await getSupabase()
+    .from('org_registrations')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+/**
+ * Get organization registration by namespace
+ */
+export async function getOrgRegistrationByNamespace(namespace: string) {
+  const { data, error } = await getSupabase()
+    .from('org_registrations')
+    .select('*')
+    .eq('namespace', namespace)
+    .in('status', ['pending', 'verified'])
+    .single();
+
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+/**
+ * Get organization registration by domain
+ */
+export async function getOrgRegistrationByDomain(domain: string) {
+  const { data, error } = await getSupabase()
+    .from('org_registrations')
+    .select('*')
+    .eq('domain', domain)
+    .in('status', ['pending', 'verified'])
+    .single();
+
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+/**
+ * Update organization registration status
+ */
+export async function updateOrgRegistrationStatus(
+  id: string,
+  status: 'verified' | 'rejected',
+  rejectionReason?: string
+) {
+  const updateData: Record<string, any> = {
+    status,
+  };
+
+  if (status === 'verified') {
+    updateData.verified_at = new Date().toISOString();
+  }
+
+  if (status === 'rejected') {
+    updateData.rejected_at = new Date().toISOString();
+    updateData.rejection_reason = rejectionReason;
+  }
+
+  const { data, error } = await getSupabase()
+    .from('org_registrations')
+    .update(updateData)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Set public key for verified organization
+ */
+export async function setOrgPublicKey(id: string, publicKey: string) {
+  const { data, error } = await getSupabase()
+    .from('org_registrations')
+    .update({ public_key: publicKey })
+    .eq('id', id)
+    .eq('status', 'verified')
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Get all pending registrations (for admin)
+ */
+export async function getPendingOrgRegistrations() {
+  const { data, error } = await getSupabase()
+    .from('org_registrations')
+    .select('*')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data || [];
 }
