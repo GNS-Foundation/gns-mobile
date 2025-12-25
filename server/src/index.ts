@@ -25,6 +25,7 @@ import dixRouter from './api/dix';
 import emailRouter, { initializeEmailGateway } from './api/email';  // 📧 NEW
 import gsiteRouter from './api/gsite';  // 🐆 gSite CRUD & Validation
 import orgRouter from './api/org';  // 🏢 Organization Registration
+import cmsRouter from './api/cms';  // 📝 CMS
 
 // Services
 import echoBot from './services/echo_bot';
@@ -156,6 +157,7 @@ app.use('/web/dix', dixRouter);
 app.use('/email', emailRouter);
 app.use('/gsite', gsiteRouter);
 app.use('/org', orgRouter);
+app.use('/cms', cmsRouter);  // 📝 CMS
 
 // ===========================================
 // Auth Challenge Endpoint
