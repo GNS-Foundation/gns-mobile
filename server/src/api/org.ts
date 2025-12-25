@@ -1,15 +1,8 @@
 // ===========================================
-// GNS NODE - ORGANIZATION REGISTRATION API
-// /org endpoints for namespace registration with DNS verification
+// GNS ORGANIZATION REGISTRATION API (FIXED)
 // ===========================================
 // Location: src/api/org.ts
-//
-// ENDPOINTS:
-//   POST /org/register     - Submit registration, get verification code
-//   POST /org/verify       - Check DNS TXT record
-//   GET  /org/status/:id   - Check registration status
-//
-// REQUIRES: Run org_registration_migration.sql first
+// Uses raw Supabase queries (no extra db functions needed)
 // ===========================================
 
 import { Router, Request, Response } from 'express';
@@ -17,55 +10,33 @@ import * as dns from 'dns';
 import { promisify } from 'util';
 import { randomBytes } from 'crypto';
 import * as db from '../lib/db';
-import { ApiResponse } from '../types';
 
 const router = Router();
-
-// Promisify DNS lookup
 const resolveTxt = promisify(dns.resolveTxt);
 
-// ===========================================
-// TYPES
-// ===========================================
+// Reserved namespaces
+const RESERVED = new Set([
+  'gns', 'gcrumbs', 'globecrumbs', 'admin', 'support', 'help',
+  'root', 'system', 'api', 'www', 'mail', 'email', 'ftp',
+  'test', 'demo', 'staging', 'dev', 'prod', 'official',
+  'security', 'abuse', 'postmaster', 'webmaster',
+]);
 
-interface OrgRegistration {
-  id: string;
-  namespace: string;
-  organization_name: string;
-  email: string;
-  website: string;
-  domain: string;
-  description: string | null;
-  tier: string;
-  verification_code: string;
-  status: 'pending' | 'verified' | 'rejected';
-  created_at: string;
-  verified_at: string | null;
-  public_key: string | null;
-}
+// Protected brands
+const PROTECTED = new Set([
+  'google', 'facebook', 'meta', 'apple', 'microsoft', 'amazon',
+  'twitter', 'x', 'instagram', 'tiktok', 'youtube', 'linkedin',
+  'netflix', 'spotify', 'uber', 'airbnb', 'stripe', 'anthropic',
+]);
 
 // ===========================================
 // HELPERS
 // ===========================================
 
-/**
- * Generate a unique verification code
- */
 function generateVerificationCode(): string {
-  const bytes = randomBytes(12);
-  return bytes.toString('hex');
+  return randomBytes(16).toString('hex');
 }
 
-/**
- * Validate namespace format
- */
-function isValidNamespace(namespace: string): boolean {
-  return /^[a-z0-9]{3,20}$/.test(namespace);
-}
-
-/**
- * Extract domain from URL
- */
 function extractDomain(website: string): string {
   let domain = website.toLowerCase().trim();
   domain = domain.replace(/^https?:\/\//, '');
@@ -74,358 +45,483 @@ function extractDomain(website: string): string {
   return domain;
 }
 
-/**
- * Check DNS TXT records for verification code
- */
-async function checkDnsTxt(domain: string, expectedCode: string): Promise<boolean> {
-  try {
-    console.log(`[DNS] Checking TXT records for ${domain}...`);
-    
-    // Try multiple record locations
-    const domainsToCheck = [
-      domain,
-      `_gns.${domain}`,
-      `gns-verify.${domain}`,
-    ];
-    
-    for (const checkDomain of domainsToCheck) {
-      try {
-        const records = await resolveTxt(checkDomain);
-        console.log(`[DNS] Found ${records.length} TXT records for ${checkDomain}`);
-        
-        // Records come as array of arrays (each record can have multiple strings)
-        for (const record of records) {
-          const recordText = record.join('');
-          console.log(`[DNS] Record: ${recordText}`);
-          
-          // Check for exact match or gns-verify= prefix
-          if (recordText === expectedCode || 
-              recordText === `gns-verify=${expectedCode}` ||
-              recordText.includes(expectedCode)) {
-            console.log(`[DNS] ✓ Verification code found!`);
-            return true;
-          }
+async function checkDnsTxt(domain: string, code: string): Promise<boolean> {
+  const domainsToCheck = [
+    `_gns.${domain}`,
+    domain,
+    `gns-verify.${domain}`,
+  ];
+  
+  for (const checkDomain of domainsToCheck) {
+    try {
+      const records = await resolveTxt(checkDomain);
+      for (const record of records) {
+        const text = record.join('');
+        if (text.includes(code)) {
+          console.log(`[DNS] ✓ Found verification at ${checkDomain}`);
+          return true;
         }
-      } catch (e) {
-        // Domain check failed, try next
-        console.log(`[DNS] No records at ${checkDomain}`);
       }
+    } catch {
+      // Try next domain
     }
-    
-    console.log(`[DNS] ✗ Verification code not found`);
-    return false;
-  } catch (error) {
-    console.error('[DNS] Lookup error:', error);
-    return false;
   }
+  
+  console.log(`[DNS] ✗ Code not found for ${domain}`);
+  return false;
 }
 
 // ===========================================
-// POST /org/register
-// Submit registration and get verification code
-// ===========================================
-
-router.post('/register', async (req: Request, res: Response) => {
-  try {
-    const { 
-      namespace, 
-      organization_name, 
-      email, 
-      website, 
-      description, 
-      tier 
-    } = req.body;
-
-    // Validate required fields
-    if (!namespace || !organization_name || !email || !website) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields: namespace, organization_name, email, website',
-      } as ApiResponse);
-    }
-
-    // Validate namespace format
-    const cleanNamespace = namespace.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!isValidNamespace(cleanNamespace)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid namespace format. Use 3-20 lowercase letters and numbers.',
-      } as ApiResponse);
-    }
-
-    // Extract domain
-    const domain = extractDomain(website);
-    if (!domain || !domain.includes('.')) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid website URL',
-      } as ApiResponse);
-    }
-
-    // Check if namespace is already taken
-    const existingAlias = await db.getAlias(cleanNamespace);
-    if (existingAlias) {
-      return res.status(409).json({
-        success: false,
-        error: 'This namespace is already registered',
-      } as ApiResponse);
-    }
-
-    // Check for pending registration
-    const existingRegistration = await db.getOrgRegistrationByNamespace(cleanNamespace);
-    if (existingRegistration && existingRegistration.status === 'verified') {
-      return res.status(409).json({
-        success: false,
-        error: 'This namespace is already registered',
-      } as ApiResponse);
-    }
-
-    // Generate verification code
-    const verificationCode = generateVerificationCode();
-    const registrationId = `org_${Date.now()}_${randomBytes(4).toString('hex')}`;
-
-    // Store registration
-    const registration = await db.createOrgRegistration({
-      id: registrationId,
-      namespace: cleanNamespace,
-      organization_name,
-      email,
-      website,
-      domain,
-      description: description || null,
-      tier: tier || 'startup',
-      verification_code: verificationCode,
-    });
-
-    console.log(`[Org] Registration created: ${cleanNamespace}@ for ${domain} (${registrationId})`);
-
-    return res.status(201).json({
-      success: true,
-      data: {
-        registration_id: registrationId,
-        namespace: cleanNamespace,
-        domain: domain,
-        verification_code: verificationCode,
-        txt_record: `gns-verify=${verificationCode}`,
-        instructions: {
-          step1: 'Log in to your domain registrar or DNS provider',
-          step2: `Add a TXT record to ${domain}`,
-          step3: `Set the value to: gns-verify=${verificationCode}`,
-          step4: 'Wait for DNS propagation (usually 5-30 minutes)',
-          step5: 'Click "Verify" to confirm ownership',
-        },
-      },
-      message: 'Registration submitted. Please add the DNS TXT record to verify ownership.',
-    } as ApiResponse);
-
-  } catch (error: any) {
-    console.error('POST /org/register error:', error);
-    
-    if (error?.code === '23505') {
-      return res.status(409).json({
-        success: false,
-        error: 'This namespace or domain is already registered',
-      } as ApiResponse);
-    }
-    
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-// ===========================================
-// POST /org/verify
-// Check DNS TXT record and complete registration
-// ===========================================
-
-router.post('/verify', async (req: Request, res: Response) => {
-  try {
-    const { registration_id, domain, verification_code } = req.body;
-
-    if (!registration_id && !domain) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing registration_id or domain',
-      } as ApiResponse);
-    }
-
-    // Get registration
-    let registration: OrgRegistration | null = null;
-    
-    if (registration_id) {
-      registration = await db.getOrgRegistration(registration_id);
-    } else if (domain) {
-      registration = await db.getOrgRegistrationByDomain(domain);
-    }
-
-    if (!registration) {
-      return res.status(404).json({
-        success: false,
-        error: 'Registration not found',
-      } as ApiResponse);
-    }
-
-    if (registration.status === 'verified') {
-      return res.json({
-        success: true,
-        data: {
-          verified: true,
-          namespace: registration.namespace,
-          message: 'Already verified',
-        },
-      } as ApiResponse);
-    }
-
-    // Check DNS
-    const isVerified = await checkDnsTxt(
-      registration.domain, 
-      registration.verification_code
-    );
-
-    if (!isVerified) {
-      return res.status(400).json({
-        success: false,
-        verified: false,
-        error: 'DNS TXT record not found. Please ensure you added the correct record and wait for DNS propagation.',
-        expected: {
-          domain: registration.domain,
-          record_type: 'TXT',
-          value: `gns-verify=${registration.verification_code}`,
-        },
-      } as ApiResponse);
-    }
-
-    // Update registration status
-    await db.updateOrgRegistrationStatus(registration.id, 'verified');
-
-    // Create the namespace alias
-    // Note: We'll need the organization's public key to complete this
-    // For now, mark as verified and they can claim it in the app
-    
-    console.log(`[Org] ✓ Verified: ${registration.namespace}@ for ${registration.domain}`);
-
-    return res.json({
-      success: true,
-      data: {
-        verified: true,
-        namespace: `${registration.namespace}@`,
-        domain: registration.domain,
-        message: 'Domain ownership verified! Your namespace is now reserved.',
-      },
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('POST /org/verify error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-// ===========================================
-// GET /org/status/:id
-// Check registration status
-// ===========================================
-
-router.get('/status/:id', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const registration = await db.getOrgRegistration(id);
-
-    if (!registration) {
-      return res.status(404).json({
-        success: false,
-        error: 'Registration not found',
-      } as ApiResponse);
-    }
-
-    return res.json({
-      success: true,
-      data: {
-        registration_id: registration.id,
-        namespace: registration.namespace,
-        organization_name: registration.organization_name,
-        domain: registration.domain,
-        status: registration.status,
-        verification_code: registration.status === 'pending' 
-          ? registration.verification_code 
-          : undefined,
-        created_at: registration.created_at,
-        verified_at: registration.verified_at,
-      },
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('GET /org/status/:id error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-// ===========================================
 // GET /org/check/:namespace
-// Quick check if namespace is available
 // ===========================================
 
 router.get('/check/:namespace', async (req: Request, res: Response) => {
   try {
     const namespace = req.params.namespace?.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    if (!namespace || namespace.length < 3) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid namespace',
-      } as ApiResponse);
-    }
+    console.log(`🔍 Checking namespace: ${namespace}`);
 
-    // Check existing alias
-    const existingAlias = await db.getAlias(namespace);
-    if (existingAlias) {
+    if (!namespace || namespace.length < 3) {
       return res.json({
         success: true,
-        data: {
-          namespace: namespace,
-          available: false,
-          reason: 'Already registered',
-        },
-      } as ApiResponse);
+        data: { available: false, reason: 'Namespace must be at least 3 characters' },
+      });
+    }
+
+    if (!/^[a-z0-9]+$/.test(namespace)) {
+      return res.json({
+        success: true,
+        data: { available: false, reason: 'Only lowercase letters and numbers allowed' },
+      });
+    }
+
+    if (namespace.length > 30) {
+      return res.json({
+        success: true,
+        data: { available: false, reason: 'Max 30 characters' },
+      });
+    }
+
+    if (RESERVED.has(namespace)) {
+      return res.json({
+        success: true,
+        data: { available: false, reason: 'This namespace is reserved' },
+      });
+    }
+
+    const supabase = db.getSupabase();
+
+    // Check aliases (existing handles)
+    const { data: alias } = await supabase
+      .from('aliases')
+      .select('handle')
+      .eq('handle', namespace)
+      .single();
+
+    if (alias) {
+      return res.json({
+        success: true,
+        data: { available: false, reason: 'Already registered as handle' },
+      });
+    }
+
+    // Check active namespaces
+    const { data: existing } = await supabase
+      .from('namespaces')
+      .select('namespace')
+      .eq('namespace', namespace)
+      .single();
+
+    if (existing) {
+      return res.json({
+        success: true,
+        data: { available: false, reason: 'Already taken' },
+      });
     }
 
     // Check pending registrations
-    const pendingRegistration = await db.getOrgRegistrationByNamespace(namespace);
-    if (pendingRegistration) {
+    const { data: pending } = await supabase
+      .from('namespace_registrations')
+      .select('namespace, status')
+      .eq('namespace', namespace)
+      .neq('status', 'suspended')
+      .single();
+
+    if (pending) {
+      return res.json({
+        success: true,
+        data: { available: false, reason: pending.status === 'verified' ? 'Already registered' : 'Registration pending' },
+      });
+    }
+
+    const isProtected = PROTECTED.has(namespace);
+
+    res.json({
+      success: true,
+      data: {
+        available: true,
+        namespace,
+        protected: isProtected,
+        requiresTier: isProtected ? 'enterprise' : null,
+        message: isProtected ? 'Protected brand - Enterprise tier required' : `${namespace}@ is available!`,
+      },
+    });
+
+  } catch (err) {
+    console.error('❌ /org/check error:', err);
+    res.status(500).json({ success: false, error: 'Check failed' });
+  }
+});
+
+// ===========================================
+// POST /org/register
+// ===========================================
+
+router.post('/register', async (req: Request, res: Response) => {
+  try {
+    const {
+      namespace,
+      organization_name,
+      website,
+      domain,
+      email,
+      description,
+      tier = 'starter',
+    } = req.body;
+
+    console.log(`📝 Registering: ${namespace}`);
+
+    if (!namespace || !organization_name || !email) {
+      return res.status(400).json({
+        success: false,
+        error: 'Required: namespace, organization_name, email',
+      });
+    }
+
+    const cleanNamespace = namespace.toLowerCase().replace(/[^a-z0-9]/g, '');
+    
+    // Need either domain or website
+    let cleanDomain = domain;
+    if (!cleanDomain && website) {
+      cleanDomain = extractDomain(website);
+    }
+    
+    if (!cleanDomain) {
+      return res.status(400).json({
+        success: false,
+        error: 'Required: domain or website',
+      });
+    }
+
+    if (!/^[a-z0-9]{3,30}$/.test(cleanNamespace)) {
+      return res.status(400).json({ success: false, error: 'Invalid namespace format (3-30 lowercase alphanumeric)' });
+    }
+
+    if (RESERVED.has(cleanNamespace)) {
+      return res.status(400).json({ success: false, error: 'Namespace reserved' });
+    }
+
+    if (PROTECTED.has(cleanNamespace) && tier !== 'enterprise') {
+      return res.status(400).json({ success: false, error: 'Protected brand - Enterprise tier required' });
+    }
+
+    const supabase = db.getSupabase();
+
+    // Check if already taken
+    const { data: existing } = await supabase
+      .from('namespaces')
+      .select('namespace')
+      .eq('namespace', cleanNamespace)
+      .single();
+
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'Namespace already taken' });
+    }
+
+    // Generate verification code
+    const verificationCode = generateVerificationCode();
+
+    // Upsert registration
+    const { data, error } = await supabase
+      .from('namespace_registrations')
+      .upsert({
+        namespace: cleanNamespace,
+        organization_name,
+        website: website || `https://${cleanDomain}`,
+        domain: cleanDomain,
+        email,
+        description: description || null,
+        tier,
+        verification_code: verificationCode,
+        status: 'pending',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'namespace' })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Supabase error:', error);
+      return res.status(500).json({ success: false, error: 'Registration failed' });
+    }
+
+    console.log(`✅ Registration created: ${cleanNamespace}@`);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        registration_id: data.id,
+        namespace: cleanNamespace,
+        domain: cleanDomain,
+        verification_code: verificationCode,
+        txt_record: `gns-verify=${verificationCode}`,
+        instructions: {
+          type: 'TXT',
+          host: `_gns.${cleanDomain}`,
+          value: `gns-verify=${verificationCode}`,
+          ttl: 3600,
+        },
+      },
+      message: 'Add the DNS TXT record to verify domain ownership.',
+    });
+
+  } catch (err) {
+    console.error('❌ /org/register error:', err);
+    res.status(500).json({ success: false, error: 'Registration failed' });
+  }
+});
+
+// ===========================================
+// POST /org/verify
+// ===========================================
+
+router.post('/verify', async (req: Request, res: Response) => {
+  try {
+    const { registration_id, domain, verification_code } = req.body;
+
+    console.log(`🔍 Verifying DNS: ${domain || registration_id}`);
+
+    if (!registration_id && !domain) {
+      return res.status(400).json({ success: false, error: 'Need registration_id or domain' });
+    }
+
+    const supabase = db.getSupabase();
+
+    // Get registration
+    let query = supabase.from('namespace_registrations').select('*');
+    
+    if (registration_id) {
+      query = query.eq('id', registration_id);
+    } else {
+      query = query.eq('domain', domain);
+    }
+    
+    const { data: reg, error } = await query.single();
+
+    if (error || !reg) {
+      return res.status(404).json({ success: false, error: 'Registration not found' });
+    }
+
+    if (reg.status === 'verified' || reg.status === 'active') {
+      return res.json({
+        success: true,
+        data: { verified: true, namespace: reg.namespace, message: 'Already verified' },
+      });
+    }
+
+    // Check DNS
+    const verified = await checkDnsTxt(reg.domain, reg.verification_code);
+
+    if (!verified) {
       return res.json({
         success: true,
         data: {
-          namespace: namespace,
-          available: false,
-          reason: pendingRegistration.status === 'verified' 
-            ? 'Already registered' 
-            : 'Registration pending',
+          verified: false,
+          message: 'DNS record not found. Wait for propagation (up to 48h).',
+          expected: {
+            host: `_gns.${reg.domain}`,
+            type: 'TXT',
+            value: `gns-verify=${reg.verification_code}`,
+          },
         },
-      } as ApiResponse);
+      });
     }
 
-    return res.json({
+    // Mark verified
+    await supabase
+      .from('namespace_registrations')
+      .update({
+        verified: true,
+        verified_at: new Date().toISOString(),
+        status: reg.tier === 'starter' ? 'active' : 'verified',
+      })
+      .eq('id', reg.id);
+
+    console.log(`✅ DNS verified: ${reg.namespace}@`);
+
+    res.json({
       success: true,
       data: {
-        namespace: namespace,
-        available: true,
+        verified: true,
+        namespace: `${reg.namespace}@`,
+        domain: reg.domain,
+        message: reg.tier === 'starter'
+          ? 'Namespace verified! Download the app to complete setup.'
+          : 'DNS verified! Complete payment to activate.',
+        next_step: reg.tier === 'starter' ? 'download_app' : 'payment',
       },
-    } as ApiResponse);
+    });
 
-  } catch (error) {
-    console.error('GET /org/check/:namespace error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
+  } catch (err) {
+    console.error('❌ /org/verify error:', err);
+    res.status(500).json({ success: false, error: 'Verification failed' });
+  }
+});
+
+// ===========================================
+// GET /org/status/:id
+// ===========================================
+
+router.get('/status/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const supabase = db.getSupabase();
+
+    const { data: reg } = await supabase
+      .from('namespace_registrations')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (!reg) {
+      return res.status(404).json({ success: false, error: 'Registration not found' });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        registration_id: reg.id,
+        namespace: reg.namespace,
+        organization_name: reg.organization_name,
+        domain: reg.domain,
+        status: reg.status,
+        verification_code: reg.status === 'pending' ? reg.verification_code : undefined,
+        created_at: reg.created_at,
+        verified_at: reg.verified_at,
+      },
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Fetch failed' });
+  }
+});
+
+// ===========================================
+// GET /org/:namespace
+// ===========================================
+
+router.get('/:namespace', async (req: Request, res: Response) => {
+  try {
+    const namespace = req.params.namespace.toLowerCase();
+    const supabase = db.getSupabase();
+
+    const { data } = await supabase
+      .from('namespaces')
+      .select('namespace, organization_name, domain, tier, member_count, verified, created_at')
+      .eq('namespace', namespace)
+      .single();
+
+    if (!data) {
+      return res.status(404).json({ success: false, error: 'Namespace not found' });
+    }
+
+    res.json({ success: true, data });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Fetch failed' });
+  }
+});
+
+// ===========================================
+// POST /org/:namespace/activate
+// ===========================================
+
+router.post('/:namespace/activate', async (req: Request, res: Response) => {
+  try {
+    const namespace = req.params.namespace.toLowerCase();
+    const { admin_pk, email } = req.body;
+
+    if (!admin_pk || !email) {
+      return res.status(400).json({ success: false, error: 'Missing admin_pk or email' });
+    }
+
+    const supabase = db.getSupabase();
+
+    // Get registration
+    const { data: reg } = await supabase
+      .from('namespace_registrations')
+      .select('*')
+      .eq('namespace', namespace)
+      .eq('email', email)
+      .in('status', ['verified', 'active'])
+      .single();
+
+    if (!reg) {
+      return res.status(404).json({ success: false, error: 'Registration not found or not verified' });
+    }
+
+    // Check if already activated
+    const { data: existing } = await supabase
+      .from('namespaces')
+      .select('namespace')
+      .eq('namespace', namespace)
+      .single();
+
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'Already activated' });
+    }
+
+    const tierLimits: Record<string, number> = { starter: 10, team: 100, enterprise: 10000 };
+
+    // Create namespace
+    const { data, error } = await supabase
+      .from('namespaces')
+      .insert({
+        namespace,
+        admin_pk,
+        organization_name: reg.organization_name,
+        domain: reg.domain,
+        tier: reg.tier,
+        member_limit: tierLimits[reg.tier] || 10,
+        verified: true,
+        verified_domain: reg.domain,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(500).json({ success: false, error: 'Activation failed' });
+    }
+
+    // Update registration
+    await supabase
+      .from('namespace_registrations')
+      .update({ status: 'active', admin_pk })
+      .eq('id', reg.id);
+
+    console.log(`✅ Activated: ${namespace}@`);
+
+    res.json({
+      success: true,
+      data: {
+        namespace,
+        organization_name: data.organization_name,
+        tier: data.tier,
+        member_limit: data.member_limit,
+      },
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Activation failed' });
   }
 });
 
