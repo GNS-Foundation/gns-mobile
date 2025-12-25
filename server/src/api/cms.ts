@@ -8,27 +8,8 @@
 import { Router, Request, Response } from 'express';
 import * as db from '../lib/db';
 import { verifySignature } from '../lib/crypto';
-import Ajv from 'ajv';
-import addFormats from 'ajv-formats';
 
 const router = Router();
-
-// Initialize AJV for theme validation
-const ajv = new Ajv({ allErrors: true, strict: false });
-addFormats(ajv);
-
-// Theme schema (simplified inline version)
-const themeSchemaValidate = ajv.compile({
-  type: 'object',
-  required: ['id', 'name', 'version', 'entityTypes', 'tokens'],
-  properties: {
-    id: { type: 'string', pattern: '^[a-z0-9-]+$' },
-    name: { type: 'string' },
-    version: { type: 'string', pattern: '^\\d+\\.\\d+\\.\\d+$' },
-    entityTypes: { type: 'array', items: { type: 'string' } },
-    tokens: { type: 'object' }
-  }
-});
 
 // ===========================================
 // THEMES
@@ -158,17 +139,15 @@ router.get('/themes/:id', async (req: Request, res: Response) => {
  */
 router.post('/themes', async (req: Request, res: Response) => {
   try {
-    const themeData = req.body;
+    const themeData: any = req.body;
 
     console.log(`📝 POST /cms/themes: ${themeData.id}`);
 
-    // Validate theme schema
-    const valid = themeSchemaValidate(themeData);
-    if (!valid) {
+    // Basic validation
+    if (!themeData.id || !themeData.name || !themeData.version || !themeData.entityTypes || !themeData.tokens) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid theme schema',
-        errors: themeSchemaValidate.errors
+        error: 'Missing required fields: id, name, version, entityTypes, tokens'
       });
     }
 
@@ -209,22 +188,22 @@ router.post('/themes', async (req: Request, res: Response) => {
       .insert({
         id: themeData.id,
         name: themeData.name,
-        description: themeData.description,
+        description: themeData.description || null,
         version: themeData.version,
-        author: themeData.author,
+        author: themeData.author || null,
         author_pk: publicKey,
-        signature: themeData.signature,
+        signature: themeData.signature || null,
         entity_types: themeData.entityTypes,
-        categories: themeData.categories,
+        categories: themeData.categories || [],
         license: themeData.license || 'free',
         price_amount: themeData.price?.amount || 0,
         price_currency: themeData.price?.currency || 'USD',
         tokens: themeData.tokens,
-        components: themeData.components,
-        layout: themeData.layout,
-        dark_mode: themeData.darkMode,
-        thumbnail_url: themeData.preview?.thumbnail,
-        screenshots: themeData.preview?.screenshots,
+        components: themeData.components || null,
+        layout: themeData.layout || null,
+        dark_mode: themeData.darkMode || null,
+        thumbnail_url: themeData.preview?.thumbnail || null,
+        screenshots: themeData.preview?.screenshots || [],
         is_default: false,
         is_published: false // Requires review
       })
@@ -256,26 +235,17 @@ router.post('/themes', async (req: Request, res: Response) => {
  */
 router.post('/themes/:id/validate', async (req: Request, res: Response) => {
   try {
-    const themeData = req.body;
-
-    const valid = themeSchemaValidate(themeData);
+    const themeData: any = req.body;
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    if (!valid && themeSchemaValidate.errors) {
-      for (const err of themeSchemaValidate.errors) {
-        errors.push(`${err.instancePath}: ${err.message}`);
-      }
-    }
-
-    // Additional validation
-    if (themeData.tokens?.colors) {
-      // Check contrast ratios (simplified)
-      const colors = themeData.tokens.colors;
-      if (colors.primary === colors.onPrimary) {
-        errors.push('colors.primary and colors.onPrimary must have sufficient contrast');
-      }
-    }
+    // Basic validation
+    if (!themeData.id) errors.push('Missing id');
+    if (!themeData.name) errors.push('Missing name');
+    if (!themeData.version) errors.push('Missing version');
+    if (!themeData.entityTypes?.length) errors.push('Missing entityTypes');
+    if (!themeData.tokens) errors.push('Missing tokens');
+    if (!themeData.tokens?.colors) errors.push('Missing tokens.colors');
 
     // Warnings
     if (!themeData.darkMode) {
@@ -342,14 +312,9 @@ router.get('/gsite/:identifier/theme', async (req: Request, res: Response) => {
         const defaultThemes: Record<string, string> = {
           'Person': 'profile-minimal',
           'Business': 'storefront-modern',
-          'Store': 'ecommerce-grid',
-          'Service': 'service-professional',
-          'Publication': 'publication-magazine',
-          'Community': 'community-forum',
-          'Organization': 'organization-corporate',
-          'Event': 'event-conference',
-          'Product': 'product-detail',
-          'Place': 'place-landmark'
+          'Store': 'storefront-modern',
+          'Service': 'storefront-modern',
+          'Organization': 'storefront-modern'
         };
         themeId = defaultThemes[gsite.type] || 'profile-minimal';
       }
@@ -454,11 +419,6 @@ router.put('/gsite/:identifier/theme', async (req: Request, res: Response) => {
       }
     }
 
-    // Validate overrides
-    if (overrides?.colors) {
-      // TODO: Validate contrast ratios
-    }
-
     // Upsert theme assignment
     const { error } = await supabase
       .from('gsite_themes')
@@ -557,45 +517,6 @@ router.get('/themes/:id/ratings', async (req: Request, res: Response) => {
 
   } catch (err) {
     res.status(500).json({ success: false, error: 'Failed to fetch ratings' });
-  }
-});
-
-// ===========================================
-// DEFAULT THEMES SEEDER
-// ===========================================
-
-/**
- * POST /cms/themes/seed
- * Seed default themes (admin only, one-time)
- */
-router.post('/themes/seed', async (req: Request, res: Response) => {
-  try {
-    const adminKey = req.headers['x-admin-key'];
-    if (adminKey !== process.env.ADMIN_KEY) {
-      return res.status(403).json({ success: false, error: 'Unauthorized' });
-    }
-
-    // Default themes (would load from JSON files in production)
-    const defaultThemes = [
-      { id: 'profile-minimal', name: 'Minimal', entityTypes: ['Person'] },
-      { id: 'profile-creative', name: 'Creative', entityTypes: ['Person'] },
-      { id: 'profile-professional', name: 'Professional', entityTypes: ['Person'] },
-      { id: 'storefront-modern', name: 'Modern', entityTypes: ['Business'] },
-      { id: 'storefront-warm', name: 'Warm', entityTypes: ['Business'] },
-      { id: 'storefront-elegant', name: 'Elegant', entityTypes: ['Business'] },
-    ];
-
-    console.log('🌱 Seeding default themes...');
-
-    // In production, load full JSON files and insert
-    res.json({
-      success: true,
-      message: 'Use migration SQL with INSERT statements for production seeding',
-      themes: defaultThemes.map(t => t.id)
-    });
-
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'Seeding failed' });
   }
 });
 
