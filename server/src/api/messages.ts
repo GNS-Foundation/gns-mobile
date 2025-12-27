@@ -39,47 +39,72 @@ export { connectedClients };
 
 interface AuthenticatedRequest extends Request {
   gnsPublicKey?: string;
+  browserSession?: any;
 }
 
 /**
- * Verify GNS authentication headers
- * Headers:
+ * Verify authentication - supports both browser sessions and signature-based auth
+ * 
+ * Browser clients (authenticated via QR):
+ *   X-GNS-Session: session token from browser pairing
+ * 
+ * Mobile/native clients (signature-based):
  *   X-GNS-PublicKey: sender's public key (hex)
  *   X-GNS-Timestamp: unix timestamp (ms)
  *   X-GNS-Signature: signature of "timestamp:publicKey"
  */
-const verifyGnsAuth = async (
-  req: AuthenticatedRequest, 
-  res: Response, 
+const verifyAuth = async (
+  req: AuthenticatedRequest,
+  res: Response,
   next: Function
 ) => {
   try {
-    const publicKey = (req.headers['x-gns-publickey'] as string)?.toLowerCase();
-    const timestamp = req.headers['x-gns-timestamp'] as string;
-    const signature = req.headers['x-gns-signature'] as string;
+    // Try browser session first
+    const sessionToken = req.headers['x-gns-session'] as string;
 
-    // Also accept X-GNS-Identity for backward compatibility
+    if (sessionToken) {
+      // Browser session authentication
+      const session = await db.getBrowserSession(sessionToken);
+
+      if (!session || !session.isActive) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid or expired session',
+        } as ApiResponse);
+      }
+
+      // Check expiry
+      if (new Date() > session.expiresAt) {
+        await db.revokeBrowserSession(sessionToken);
+        return res.status(401).json({
+          success: false,
+          error: 'Session expired',
+        } as ApiResponse);
+      }
+
+      // Update last used
+      await db.updateBrowserSessionLastUsed(sessionToken);
+
+      // Attach to request
+      req.browserSession = session;
+      req.gnsPublicKey = session.publicKey;
+      return next();
+    }
+
+    // Fall back to signature-based auth
+    const publicKey = (req.headers['x-gns-publickey'] as string)?.toLowerCase();
     const identity = (req.headers['x-gns-identity'] as string)?.toLowerCase();
-    
     const pk = publicKey || identity;
 
     if (!pk || !isValidPublicKey(pk)) {
       return res.status(401).json({
         success: false,
-        error: 'Missing or invalid X-GNS-PublicKey header',
+        error: 'Missing authentication (X-GNS-Session or X-GNS-PublicKey required)',
       } as ApiResponse);
     }
 
     // For now, trust the public key
     // TODO: Verify signature in production
-    // if (signature && timestamp) {
-    //   const message = `${timestamp}:${pk}`;
-    //   const isValid = verifySignature(pk, message, signature);
-    //   if (!isValid) {
-    //     return res.status(401).json({ success: false, error: 'Invalid signature' });
-    //   }
-    // }
-
     req.gnsPublicKey = pk;
     next();
   } catch (error) {
@@ -87,6 +112,11 @@ const verifyGnsAuth = async (
     res.status(401).json({ success: false, error: 'Authentication failed' });
   }
 };
+
+/**
+ * Legacy signature-based auth (kept for backward compatibility)
+ */
+const verifyGnsAuth = verifyAuth;
 
 // ===========================================
 // SPECIFIC ROUTES (MUST BE BEFORE WILDCARD)
@@ -213,6 +243,126 @@ router.post('/presence', verifyGnsAuth, async (req: AuthenticatedRequest, res: R
   }
 });
 
+/**
+ * POST /messages/send
+ * Simplified message sending for QR-paired browsers
+ * Uses session token instead of signature-based auth
+ */
+router.post('/send', async (req: Request, res: Response) => {
+  try {
+    const sessionToken = req.headers['x-gns-session'] as string;
+    const publicKey = (req.headers['x-gns-publickey'] as string)?.toLowerCase();
+
+    if (!sessionToken) {
+      return res.status(401).json({
+        success: false,
+        error: 'Missing X-GNS-Session header',
+      } as ApiResponse);
+    }
+
+    // Verify session is valid
+    const session = await db.getBrowserSession(sessionToken);
+
+    if (!session || !session.isActive) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or expired session',
+      } as ApiResponse);
+    }
+
+    // Verify publicKey matches session (if provided)
+    if (publicKey && session.publicKey !== publicKey) {
+      return res.status(401).json({
+        success: false,
+        error: 'Public key mismatch',
+      } as ApiResponse);
+    }
+
+    // Check session expiry
+    if (new Date() > session.expiresAt) {
+      await db.revokeBrowserSession(sessionToken);
+      return res.status(401).json({
+        success: false,
+        error: 'Session expired',
+      } as ApiResponse);
+    }
+
+    // Update last used
+    await db.updateBrowserSessionLastUsed(sessionToken);
+
+    // Get message content
+    const { to, content, threadId } = req.body;
+
+    if (!to || !content) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: to, content',
+      } as ApiResponse);
+    }
+
+    if (!isValidPublicKey(to)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid recipient public key',
+      } as ApiResponse);
+    }
+
+    // Get sender's identity
+    const senderHandle = session.handle || session.publicKey.substring(0, 8);
+    const recipientKey = to.toLowerCase();
+
+    // Create message envelope
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const actualThreadId = threadId || `thread_${session.publicKey}_${recipientKey}`;
+
+    const envelope = {
+      id: messageId,
+      type: 'direct',
+      fromPublicKey: session.publicKey,
+      fromHandle: senderHandle,
+      toPublicKeys: [recipientKey],
+      payloadType: 'gns/text.plain',
+      encryptedPayload: content, // Note: Should be encrypted in production
+      threadId: actualThreadId,
+      timestamp: Date.now(),
+    };
+
+    // Store message in database
+    const message = await db.createEnvelopeMessage(
+      session.publicKey,
+      recipientKey,
+      envelope,
+      actualThreadId
+    );
+
+    // Deliver via WebSocket if recipient is connected
+    notifyRecipients([recipientKey], {
+      type: 'message',
+      data: envelope,
+    });
+
+    console.log(`📨 Browser message: ${senderHandle} → ${recipientKey.substring(0, 8)}...`);
+
+    return res.json({
+      success: true,
+      message: 'Message sent',
+      data: {
+        messageId: messageId,
+        threadId: actualThreadId,
+        timestamp: envelope.timestamp,
+        created_at: message.created_at,
+      },
+    } as ApiResponse);
+
+  } catch (error) {
+    console.error('POST /messages/send error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    } as ApiResponse);
+  }
+});
+
 // ===========================================
 // WILDCARD ROUTE (MUST BE AFTER SPECIFIC ROUTES)
 // ===========================================
@@ -221,21 +371,21 @@ router.post('/presence', verifyGnsAuth, async (req: AuthenticatedRequest, res: R
 router.post('/:to_pk', async (req: Request, res: Response) => {
   try {
     const toPk = req.params.to_pk?.toLowerCase();
-    
+
     if (!isValidPublicKey(toPk)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid recipient public key format',
       } as ApiResponse);
     }
-    
+
     const parseResult = messageSchema.safeParse({
       from_pk: req.body.from_pk,
       to_pk: toPk,
       payload: req.body.payload,
       signature: req.body.signature,
     });
-    
+
     if (!parseResult.success) {
       return res.status(400).json({
         success: false,
@@ -243,22 +393,22 @@ router.post('/:to_pk', async (req: Request, res: Response) => {
         message: parseResult.error.errors.map(e => e.message).join(', '),
       } as ApiResponse);
     }
-    
+
     const { from_pk, payload, signature } = parseResult.data;
-    
+
     // Verify signature
     const isValid = verifyMessage(from_pk, { to_pk: toPk, payload }, signature);
-    
+
     if (!isValid) {
       return res.status(401).json({
         success: false,
         error: 'Invalid signature',
       } as ApiResponse);
     }
-    
+
     // Create message
     const message = await db.createEnvelopeMessage(from_pk, toPk, payload, signature);
-    
+
     // Notify via WebSocket if recipient is connected
     notifyRecipients([toPk], {
       type: 'message',
@@ -269,9 +419,9 @@ router.post('/:to_pk', async (req: Request, res: Response) => {
         created_at: message.created_at,
       },
     });
-    
+
     console.log(`Message queued: ${from_pk.substring(0, 8)}... → ${toPk.substring(0, 8)}...`);
-    
+
     return res.status(201).json({
       success: true,
       data: {
@@ -281,7 +431,7 @@ router.post('/:to_pk', async (req: Request, res: Response) => {
       },
       message: 'Message queued for delivery',
     } as ApiResponse);
-    
+
   } catch (error) {
     console.error('POST /messages/:to_pk error:', error);
     return res.status(500).json({
@@ -300,7 +450,7 @@ router.get('/inbox', verifyGnsAuth, async (req: AuthenticatedRequest, res: Respo
   try {
     const pk = req.gnsPublicKey!;
     const messages = await db.getInbox(pk);
-    
+
     return res.json({
       success: true,
       data: messages.map(m => {
@@ -314,18 +464,18 @@ router.get('/inbox', verifyGnsAuth, async (req: AuthenticatedRequest, res: Respo
           timestamp: new Date(m.created_at).getTime(),
           signature: m.signature,
         };
-        
+
         // CRITICAL: Ensure encryptedPayload is a string, not an object
         // JSONB may parse JSON-like strings into objects
         if (env.encryptedPayload && typeof env.encryptedPayload === 'object') {
           env.encryptedPayload = JSON.stringify(env.encryptedPayload);
         }
-        
+
         return env;
       }),
       total: messages.length,
     } as ApiResponse);
-    
+
   } catch (error) {
     console.error('GET /messages/inbox error:', error);
     return res.status(500).json({
@@ -340,12 +490,12 @@ router.delete('/:id', verifyGnsAuth, async (req: AuthenticatedRequest, res: Resp
   try {
     const messageId = req.params.id;
     await db.markMessageDelivered(messageId);
-    
+
     return res.json({
       success: true,
       message: 'Message acknowledged',
     } as ApiResponse);
-    
+
   } catch (error) {
     console.error('DELETE /messages/:id error:', error);
     return res.status(500).json({
@@ -384,7 +534,7 @@ router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response)
     }
 
     // Get recipients from envelope or request body
-    const recipientList: string[] = recipients || 
+    const recipientList: string[] = recipients ||
       [...(envelope.toPublicKeys || []), ...(envelope.ccPublicKeys || [])];
 
     if (recipientList.length === 0) {
@@ -396,7 +546,7 @@ router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response)
 
     // Store message for each recipient
     const storedIds: string[] = [];
-    
+
     for (const recipientKey of recipientList) {
       const message = await db.createEnvelopeMessage(
         senderKey,
@@ -405,7 +555,7 @@ router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response)
         envelope.threadId || null
       );
       storedIds.push(message.id);
-      
+
       // Notify via WebSocket
       notifyRecipients([recipientKey], {
         type: 'message',
@@ -458,14 +608,14 @@ router.get('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) 
           timestamp: new Date(m.created_at).getTime(),
           signature: m.signature,
         };
-        
+
         // CRITICAL FIX: Ensure encryptedPayload is a string, not an object
         // JSONB may parse JSON-like strings into objects, but for signature verification
         // to work, encryptedPayload MUST be a string (the ciphertext)
         if (env.encryptedPayload && typeof env.encryptedPayload === 'object') {
           env.encryptedPayload = JSON.stringify(env.encryptedPayload);
         }
-        
+
         return env;
       }),
       count: messages.length,
@@ -506,12 +656,12 @@ router.get('/thread/:threadId', verifyGnsAuth, async (req: AuthenticatedRequest,
           timestamp: new Date(m.created_at).getTime(),
           signature: m.signature,
         };
-        
+
         // CRITICAL: Ensure encryptedPayload is a string, not an object
         if (env.encryptedPayload && typeof env.encryptedPayload === 'object') {
           env.encryptedPayload = JSON.stringify(env.encryptedPayload);
         }
-        
+
         return env;
       }),
       count: messages.length,
@@ -571,7 +721,7 @@ router.get('/presence/:publicKey', async (req: Request, res: Response) => {
  * Call from index.ts: setupWebSocket(httpServer)
  */
 export function setupWebSocket(server: Server): WebSocketServer {
-  const wss = new WebSocketServer({ 
+  const wss = new WebSocketServer({
     server,
     path: '/ws'
   });
@@ -635,8 +785,8 @@ export function setupWebSocket(server: Server): WebSocketServer {
     });
 
     // Send welcome
-    ws.send(JSON.stringify({ 
-      type: 'connected', 
+    ws.send(JSON.stringify({
+      type: 'connected',
       publicKey,
       timestamp: Date.now(),
     }));
@@ -672,8 +822,8 @@ export function setupWebSocket(server: Server): WebSocketServer {
  * Handle incoming WebSocket message
  */
 async function handleWebSocketMessage(
-  ws: WebSocket, 
-  publicKey: string, 
+  ws: WebSocket,
+  publicKey: string,
   message: any
 ) {
   switch (message.type) {
@@ -746,7 +896,7 @@ async function handleWebSocketMessage(
  */
 export function notifyRecipients(publicKeys: string[], message: any) {
   const data = JSON.stringify(message);
-  
+
   for (const key of publicKeys) {
     const normalizedKey = key.toLowerCase();
     const clients = connectedClients.get(normalizedKey);
