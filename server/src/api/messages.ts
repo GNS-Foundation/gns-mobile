@@ -231,12 +231,17 @@ router.get('/conversation', verifySessionAuth, async (req: AuthenticatedRequest,
         threadId: m.thread_id,
       };
 
+
       if (isOutgoing && m.sender_encrypted_payload) {
         // OUTGOING: Use sender's encrypted copy (we can decrypt)
         envelope.encryptedPayload = m.sender_encrypted_payload;
         envelope.ephemeralPublicKey = m.sender_ephemeral_public_key;
         envelope.nonce = m.sender_nonce;
         envelope.isSenderCopy = true;
+        // ✅ CRITICAL FIX: Also set sender fields so they're available at top level
+        envelope.senderEncryptedPayload = m.sender_encrypted_payload;
+        envelope.senderEphemeralPublicKey = m.sender_ephemeral_public_key;
+        envelope.senderNonce = m.sender_nonce;
       } else {
         // INCOMING: Use recipient's encrypted copy OR legacy envelope
         const env = m.envelope || {};
@@ -244,6 +249,7 @@ router.get('/conversation', verifySessionAuth, async (req: AuthenticatedRequest,
         envelope.ephemeralPublicKey = env.ephemeralPublicKey || m.ephemeral_public_key;
         envelope.nonce = env.nonce || m.nonce;
       }
+
 
       return {
         id: m.id,
