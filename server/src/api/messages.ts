@@ -165,20 +165,8 @@ router.post('/send', verifySessionAuth, async (req: AuthenticatedRequest, res: R
       envelope: envelope,
     });
 
-    // Check if recipient is @echo bot
-    const echoHandle = echoBot.getHandle();
-    if (echoHandle && toPk === echoHandle.publicKey.toLowerCase()) {
-      console.log('🤖 Message to @echo - triggering echo response');
+    // Note: Echo bot will pick up messages through its polling mechanism
 
-      // Async echo response
-      setTimeout(async () => {
-        try {
-          await echoBot.handleMessage(senderPk, envelope);
-        } catch (err) {
-          console.error('Echo bot error:', err);
-        }
-      }, 500);
-    }
 
     return res.status(201).json({
       success: true,
