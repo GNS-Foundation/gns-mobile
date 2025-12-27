@@ -22,10 +22,10 @@ import paymentsRouter from './api/payments';
 import geoauthRouter from './api/geoauth';
 import webRouter from './api/web';
 import dixRouter from './api/dix';
-import emailRouter, { initializeEmailGateway } from './api/email';  // 📧 NEW
-import gsiteRouter from './api/gsite';  // 🐆 gSite CRUD & Validation
-import orgRouter from './api/org';  // 🏢 Organization Registration
-import cmsRouter from './api/cms';  // 📝 CMS
+import emailRouter, { initializeEmailGateway } from './api/email';
+import gsiteRouter from './api/gsite';
+import orgRouter from './api/org';
+import cmsRouter from './api/cms';
 
 // Services
 import echoBot from './services/echo_bot';
@@ -157,7 +157,7 @@ app.use('/web/dix', dixRouter);
 app.use('/email', emailRouter);
 app.use('/gsite', gsiteRouter);
 app.use('/org', orgRouter);
-app.use('/cms', cmsRouter);  // 📝 CMS
+app.use('/cms', cmsRouter);
 
 // ===========================================
 // Auth Challenge Endpoint

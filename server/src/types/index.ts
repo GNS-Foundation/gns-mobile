@@ -7,21 +7,21 @@
 // ===========================================
 export interface GnsRecord {
   version: number;
-  identity: string;        
-  handle?: string | null;         
-  encryption_key?: string | null;  
+  identity: string;
+  handle?: string | null;
+  encryption_key?: string | null;
   modules: GnsModule[];
   endpoints: GnsEndpoint[];
   epoch_roots: string[];
-  trust_score: number;       
+  trust_score: number;
   breadcrumb_count: number;
-  created_at: string;        
-  updated_at: string;        
+  created_at: string;
+  updated_at: string;
 }
 
 export interface GnsModule {
   id: string;
-  schema: string;        
+  schema: string;
   name?: string;
   description?: string;
   data_url?: string;
@@ -123,7 +123,7 @@ export interface DbRecord {
   signature: string;
   version: number;
   handle?: string | null;
-  encryption_key?: string | null; 
+  encryption_key?: string | null;
   trust_score: number;
   breadcrumb_count: number;
   created_at: string;
@@ -214,6 +214,21 @@ export interface DbGeoAuthSession {
   authorized_at?: string;
   expires_at: string;
 }
+
+export interface DbBrowserSession {
+  id: number;
+  session_token: string;
+  public_key: string;
+  handle?: string;
+  browser_info: string;
+  device_info?: any;
+  created_at: Date;
+  expires_at: Date;
+  last_used_at: Date;
+  is_active: boolean;
+  revoked_at?: Date;
+}
+
 
 // ===========================================
 // Sync / Gossip

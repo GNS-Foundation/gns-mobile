@@ -1734,3 +1734,211 @@ export async function getPendingOrgRegistrations() {
   if (error) throw error;
   return data || [];
 }
+
+// ===========================================
+// BROWSER SESSIONS
+// ===========================================
+
+export interface BrowserSessionInput {
+  sessionToken: string;
+  publicKey: string;
+  handle?: string;
+  browserInfo: string;
+  deviceInfo?: any;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export interface BrowserSession {
+  id: number;
+  sessionToken: string;
+  publicKey: string;
+  handle?: string;
+  browserInfo: string;
+  deviceInfo?: any;
+  createdAt: Date;
+  expiresAt: Date;
+  lastUsedAt: Date;
+  isActive: boolean;
+  revokedAt?: Date;
+}
+
+/**
+ * Create a new browser session
+ */
+export async function createBrowserSession(input: BrowserSessionInput): Promise<BrowserSession> {
+  const { data, error } = await getSupabase()
+    .from('browser_sessions')
+    .insert({
+      session_token: input.sessionToken,
+      public_key: input.publicKey.toLowerCase(),
+      handle: input.handle?.toLowerCase() || null,
+      browser_info: input.browserInfo,
+      device_info: input.deviceInfo || null,
+      created_at: input.createdAt.toISOString(),
+      expires_at: input.expiresAt.toISOString(),
+      last_used_at: new Date().toISOString(),
+      is_active: true,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating browser session:', error);
+    throw error;
+  }
+
+  return mapBrowserSession(data);
+}
+
+/**
+ * Get browser session by token
+ */
+export async function getBrowserSession(sessionToken: string): Promise<BrowserSession | null> {
+  const { data, error } = await getSupabase()
+    .from('browser_sessions')
+    .select('*')
+    .eq('session_token', sessionToken)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    console.error('Error fetching browser session:', error);
+    throw error;
+  }
+
+  return data ? mapBrowserSession(data) : null;
+}
+
+/**
+ * Get all active browser sessions for a user
+ */
+export async function getBrowserSessions(publicKey: string): Promise<BrowserSession[]> {
+  const { data, error } = await getSupabase()
+    .from('browser_sessions')
+    .select('*')
+    .eq('public_key', publicKey.toLowerCase())
+    .eq('is_active', true)
+    .order('last_used_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching browser sessions:', error);
+    throw error;
+  }
+
+  return (data || []).map(mapBrowserSession);
+}
+
+/**
+ * Update session last used timestamp
+ */
+export async function updateBrowserSessionLastUsed(sessionToken: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('browser_sessions')
+    .update({ last_used_at: new Date().toISOString() })
+    .eq('session_token', sessionToken);
+
+  if (error) {
+    console.error('Error updating browser session:', error);
+  }
+}
+
+/**
+ * Revoke a browser session
+ */
+export async function revokeBrowserSession(sessionToken: string): Promise<boolean> {
+  const { error } = await getSupabase()
+    .from('browser_sessions')
+    .update({
+      is_active: false,
+      revoked_at: new Date().toISOString(),
+    })
+    .eq('session_token', sessionToken);
+
+  if (error) {
+    console.error('Error revoking browser session:', error);
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Revoke all browser sessions for a user
+ */
+export async function revokeAllBrowserSessions(publicKey: string): Promise<number> {
+  const { data, error } = await getSupabase()
+    .from('browser_sessions')
+    .update({
+      is_active: false,
+      revoked_at: new Date().toISOString(),
+    })
+    .eq('public_key', publicKey.toLowerCase())
+    .eq('is_active', true)
+    .select();
+
+  if (error) {
+    console.error('Error revoking all browser sessions:', error);
+    throw error;
+  }
+
+  return data?.length || 0;
+}
+
+/**
+ * Clean up expired sessions (run periodically)
+ */
+export async function cleanupExpiredSessions(): Promise<number> {
+  const { data, error } = await getSupabase()
+    .from('browser_sessions')
+    .update({
+      is_active: false,
+      revoked_at: new Date().toISOString(),
+    })
+    .lt('expires_at', new Date().toISOString())
+    .eq('is_active', true)
+    .select();
+
+  if (error) {
+    console.error('Error cleaning up sessions:', error);
+    return 0;
+  }
+
+  return data?.length || 0;
+}
+
+/**
+ * Map database row to BrowserSession type
+ */
+function mapBrowserSession(row: any): BrowserSession {
+  return {
+    id: row.id,
+    sessionToken: row.session_token,
+    publicKey: row.public_key,
+    handle: row.handle || undefined,
+    browserInfo: row.browser_info,
+    deviceInfo: row.device_info || undefined,
+    createdAt: new Date(row.created_at),
+    expiresAt: new Date(row.expires_at),
+    lastUsedAt: new Date(row.last_used_at),
+    isActive: row.is_active,
+    revokedAt: row.revoked_at ? new Date(row.revoked_at) : undefined,
+  };
+}
+
+/**
+ * Get alias by identity public key
+ */
+export async function getAliasByIdentity(publicKey: string): Promise<{ handle: string } | null> {
+  const { data, error } = await getSupabase()
+    .from('aliases')
+    .select('handle')
+    .eq('identity', publicKey.toLowerCase())
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    console.error('Error fetching alias:', error);
+    return null;
+  }
+
+  return data;
+}
