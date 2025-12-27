@@ -96,7 +96,7 @@ function createCanonicalEnvelopeString(envelope: EnvelopeData): string {
     nonce: envelope.nonce,
     priority: envelope.priority,
   };
-  
+
   // Custom canonicalization that EXCLUDES null values (matches Dart client)
   function canonicalize(value: any): string {
     if (value === null) return 'null';
@@ -117,7 +117,7 @@ function createCanonicalEnvelopeString(envelope: EnvelopeData): string {
     }
     return JSON.stringify(value);
   }
-  
+
   return canonicalize(canonicalData);
 }
 
@@ -126,11 +126,11 @@ function createCanonicalEnvelopeString(envelope: EnvelopeData): string {
 // ===========================================
 
 let echoKeypair: nacl.SignKeyPair | null = null;
-let echoEd25519PublicKeyHex: string = '';    
+let echoEd25519PublicKeyHex: string = '';
 let echoEd25519PrivateKeyHex: string = '';
-let echoX25519PublicKeyHex: string = '';      
-let echoX25519PrivateKey: Uint8Array | null = null;  
-let pollInterval: NodeJS.Timeout | null = null; 
+let echoX25519PublicKeyHex: string = '';
+let echoX25519PrivateKey: Uint8Array | null = null;
+let pollInterval: NodeJS.Timeout | null = null;
 
 /**
  * Initialize or generate the @echo bot keypair
@@ -139,10 +139,10 @@ let pollInterval: NodeJS.Timeout | null = null;
 export async function initializeEchoBot(): Promise<{ publicKey: string; privateKey: string }> {
   // Initialize libsodium before using crypto functions
   await sodium.ready;
-  
+
   const envPrivateKey = process.env.ECHO_PRIVATE_KEY;
   const envX25519PrivateKey = process.env.ECHO_X25519_PRIVATE_KEY;
-  
+
   if (envPrivateKey && envPrivateKey.length === 128) {
     const secretKey = hexToBytes(envPrivateKey);
     echoKeypair = {
@@ -151,7 +151,7 @@ export async function initializeEchoBot(): Promise<{ publicKey: string; privateK
     };
     echoEd25519PublicKeyHex = bytesToHex(echoKeypair.publicKey);
     echoEd25519PrivateKeyHex = envPrivateKey;
-    
+
     // Load or generate X25519 key (SEPARATE from Ed25519)
     if (envX25519PrivateKey && envX25519PrivateKey.length === 64) {
       echoX25519PrivateKey = hexToBytes(envX25519PrivateKey);
@@ -162,11 +162,11 @@ export async function initializeEchoBot(): Promise<{ publicKey: string; privateK
       const x25519Kp = nacl.box.keyPair();
       echoX25519PrivateKey = x25519Kp.secretKey;
       echoX25519PublicKeyHex = bytesToHex(x25519Kp.publicKey);
-      
+
       console.log(`   ⚠️  SAVE THIS TO RAILWAY ENV AS ECHO_X25519_PRIVATE_KEY:`);
       console.log(`   ${bytesToHex(echoX25519PrivateKey)}`);
     }
-    
+
     console.log(`🤖 @echo bot initialized with existing keypair`);
     console.log(`   Ed25519 (identity): ${echoEd25519PublicKeyHex.substring(0, 16)}...`);
     console.log(`   X25519 (encryption): ${echoX25519PublicKeyHex.substring(0, 16)}...`);
@@ -176,12 +176,12 @@ export async function initializeEchoBot(): Promise<{ publicKey: string; privateK
     echoKeypair = nacl.sign.keyPair();
     echoEd25519PublicKeyHex = bytesToHex(echoKeypair.publicKey);
     echoEd25519PrivateKeyHex = bytesToHex(echoKeypair.secretKey);
-    
+
     // Generate new X25519 keypair (SEPARATE)
     const x25519Kp = nacl.box.keyPair();
     echoX25519PrivateKey = x25519Kp.secretKey;
     echoX25519PublicKeyHex = bytesToHex(x25519Kp.publicKey);
-    
+
     console.log(`🤖 @echo bot generated NEW dual keypair`);
     console.log(`   ⚠️  SAVE THESE TO RAILWAY ENV:`);
     console.log(`   ECHO_PRIVATE_KEY=${echoEd25519PrivateKeyHex}`);
@@ -189,9 +189,9 @@ export async function initializeEchoBot(): Promise<{ publicKey: string; privateK
     console.log(`   Ed25519 Public: ${echoEd25519PublicKeyHex}`);
     console.log(`   X25519 Public: ${echoX25519PublicKeyHex}`);
   }
-  
+
   console.log(`   Handle: @${ECHO_CONFIG.handle}`);
-  
+
   return {
     publicKey: echoEd25519PublicKeyHex,
     privateKey: echoEd25519PrivateKeyHex,
@@ -290,37 +290,37 @@ function decryptFromSender(
   try {
     // FIXED:
     const encrypted = Buffer.from(encryptedPayload, 'base64');
-    const ephemeralPub = decodeBase64(ephemeralPublicKey);  // ✅ Correct Base64 decoding
+    const ephemeralPub = Buffer.from(ephemeralPublicKey, 'base64');
     const nonce = Buffer.from(nonceStr, 'base64');
-    
+
     // 1. Check for the SEPARATE X25519 private key
     if (!echoX25519PrivateKey) {
       throw new Error('Echo X25519 private key not initialized for decryption');
     }
-    
+
     // 2. Derive shared secret using the correct private key
     const sharedSecret = x25519SharedSecret(
       echoX25519PrivateKey, // 🔑 Bot's X25519 Private Key
       ephemeralPub
     );
-    
+
     // 3. Derive decryption key with HKDF
     const decryptionKey = deriveKey(sharedSecret, HKDF_INFO_ENVELOPE);
-    
+
     // 4. Decrypt payload
     const ciphertext = encrypted.slice(0, encrypted.length - MAC_LENGTH);
     const authTag = encrypted.slice(encrypted.length - MAC_LENGTH);
-    
+
     const decipher = crypto.createDecipheriv('chacha20-poly1305', decryptionKey, nonce, {
       authTagLength: MAC_LENGTH,
     });
     decipher.setAuthTag(authTag);
-    
+
     const decrypted = Buffer.concat([
       decipher.update(ciphertext),
       decipher.final(),
     ]);
-    
+
     return decrypted;
   } catch (error) {
     console.error('   ⚠️ Decryption error (MAC FAILED):', error);
@@ -341,27 +341,27 @@ function encryptForRecipient(
 } {
   // 1. Generate ephemeral keypair
   const ephemeral = generateEphemeralKeyPair();
-  
+
   // 2. Derive shared secret
   const sharedSecret = x25519SharedSecret(ephemeral.privateKey, recipientX25519PublicKey);
-  
+
   // 3. Derive encryption key with HKDF
   const encryptionKey = deriveKey(sharedSecret, HKDF_INFO_ENVELOPE);
-  
+
   // 4. Generate random nonce
   const nonce = crypto.randomBytes(NONCE_LENGTH);
-  
+
   // 5. Encrypt with ChaCha20-Poly1305
   const cipher = crypto.createCipheriv('chacha20-poly1305', encryptionKey, nonce, {
     authTagLength: MAC_LENGTH,
   });
-  
+
   const encrypted = Buffer.concat([
     cipher.update(payload),
     cipher.final(),
     cipher.getAuthTag(),
   ]);
-  
+
   return {
     encryptedPayload: encrypted.toString('base64'),
     ephemeralPublicKey: encodeBase64(ephemeral.publicKey),  // ✅ BASE64 (matches client)
@@ -387,40 +387,40 @@ async function createEchoResponse(
   // Create response content
   const responseContent = {
     type: 'text',
-    text: originalContent 
+    text: originalContent
       ? `📣 Echo: "${originalContent.substring(0, 100)}${originalContent.length > 100 ? '...' : ''}"`
       : '📣 Echo received your message!',
     format: 'plain',
   };
-  
+
   const payload = Buffer.from(JSON.stringify(responseContent), 'utf8');
-  
+
   // ✅ CLEAN: Fetch recipient's X25519 encryption key directly from database
   // NO Ed25519→X25519 conversion needed!
   console.log(`   Fetching recipient X25519 key from database...`);
   const recipientRecord = await db.getRecord(originalFromPk);
-  
+
   if (!recipientRecord) {
     throw new Error(`Recipient record not found: ${originalFromPk}`);
   }
-  
+
   if (!recipientRecord.encryption_key) {
     throw new Error(`Recipient has no X25519 encryption_key: ${originalFromPk}`);
   }
-  
+
   const recipientX25519 = hexToBytes(recipientRecord.encryption_key);
-  
+
   console.log(`   ✅ Using recipient's X25519 key directly from database`);
   console.log(`   Ed25519 (identity):  ${originalFromPk.substring(0, 16)}...`);
   console.log(`   X25519 (encryption): ${recipientRecord.encryption_key.substring(0, 16)}...`);
-  
+
   // Encrypt using recipient's X25519 key (no conversion!)
   const encrypted = encryptForRecipient(payload, recipientX25519);
-  
+
   // Create envelope data
   const envelopeId = generateUUID();
   const timestamp = Date.now();
-  
+
   const envelope: EnvelopeData = {
     id: envelopeId,
     version: 1,
@@ -440,24 +440,24 @@ async function createEchoResponse(
     nonce: encrypted.nonce,
     priority: 1,
   };
-  
+
   // Sign envelope with Ed25519 key
   const dataToSign = createCanonicalEnvelopeString(envelope);
-  
+
   // Hash with SHA256 (CRITICAL: Must match client verification)
   // Client verifies: algorithm.verify(SHA256(canonicalJSON), signature)
   const canonicalHash = crypto.createHash('sha256')
     .update(dataToSign, 'utf8')
     .digest();
-  
+
   const signature = nacl.sign.detached(
     canonicalHash,  // Sign the HASH, not raw bytes
     echoKeypair!.secretKey
   );
-  
+
   console.log(`   ✅ Response envelope created: ${envelopeId.substring(0, 8)}...`);
   console.log(`   ✅ Encrypted with recipient's X25519 key (no conversion)`);
-  
+
   return {
     envelope,
     signature: bytesToHex(signature),
@@ -473,17 +473,17 @@ async function createEchoResponse(
  */
 async function processIncomingMessages(): Promise<void> {
   if (!ECHO_CONFIG.enabled) return;
-  
+
   try {
     // Fetch unread messages for the bot
     const messages = await db.getInbox(echoEd25519PublicKeyHex);
-    
+
     if (!messages || messages.length === 0) {
       return;
     }
-    
+
     console.log(`📨 @echo processing ${messages.length} message(s)`);
-    
+
     for (const msg of messages) {
       try {
         // ✅ CRITICAL FIX: Skip messages FROM the bot itself!
@@ -492,32 +492,32 @@ async function processIncomingMessages(): Promise<void> {
           await db.markMessageDelivered(msg.id);
           continue;
         }
-        
+
         // Get envelope from JSONB column (already parsed)
         let envelope: any = msg.envelope;
-        
+
         if (!envelope) {
           console.warn(`   ⚠️ Message ${msg.id} has no envelope, skipping`);
           continue;
         }
-        
+
         if (!envelope.encryptedPayload || !envelope.ephemeralPublicKey || !envelope.nonce) {
           console.warn(`   ⚠️ Message ${msg.id} missing encryption fields, skipping`);
           continue;
         }
-        
+
         // Decrypt payload using bot's X25519 private key
         const decrypted = decryptFromSender(
           envelope.encryptedPayload,
           envelope.ephemeralPublicKey,
           envelope.nonce
         );
-        
+
         if (!decrypted) {
           console.warn(`   ⚠️ Failed to decrypt message ${msg.id}, skipping`);
           continue;
         }
-        
+
         // Parse decrypted content
         let content: any;
         try {
@@ -525,10 +525,10 @@ async function processIncomingMessages(): Promise<void> {
         } catch {
           content = { type: 'unknown', text: decrypted.toString('utf8') };
         }
-        
+
         console.log(`   📩 Decrypted message from ${msg.from_pk.substring(0, 16)}...`);
         console.log(`   Type: ${content.type}, Text: ${content.text?.substring(0, 50) || 'N/A'}`);
-        
+
         // Skip delete messages, reactions, receipts, typing indicators, etc.
         if (envelope.payloadType !== 'gns/text.plain') {
           console.log(`   ⏭️  Skipping non-text message type: ${envelope.payloadType}`);
@@ -536,19 +536,19 @@ async function processIncomingMessages(): Promise<void> {
           continue;
         }
         console.log(`   ✅ Processing text message for echo response...`);
-        
+
         // Create and send echo response
         const response = await createEchoResponse(
           msg.from_pk,
           content.text || null
         );
-        
+
         // Add signature to envelope
         const envelopeWithSignature = {
           ...response.envelope,
           signature: response.signature,
         };
-        
+
         // Store response in database using envelope method
         await db.createEnvelopeMessage(
           response.envelope.fromPublicKey,
@@ -556,12 +556,12 @@ async function processIncomingMessages(): Promise<void> {
           envelopeWithSignature,
           null  // threadId
         );
-        
+
         console.log(`   ✅ Echo response sent to ${msg.from_pk.substring(0, 16)}...`);
-        
+
         // Mark original message as delivered
         await db.markMessageDelivered(msg.id);
-        
+
       } catch (error) {
         console.error(`   ❌ Error processing message ${msg.id}:`, error);
       }
@@ -583,19 +583,19 @@ export function startPolling(): void {
     console.log('⚠️ @echo polling already running');
     return;
   }
-  
+
   if (!ECHO_CONFIG.enabled) {
     console.log('⚠️ @echo bot is disabled');
     return;
   }
-  
+
   console.log(`🔄 @echo polling started (interval: ${ECHO_CONFIG.pollIntervalMs}ms)`);
-  
+
   // Process immediately, then start interval
   processIncomingMessages().catch(err => {
     console.error('Error in initial message processing:', err);
   });
-  
+
   pollInterval = setInterval(() => {
     processIncomingMessages().catch(err => {
       console.error('Error in message processing:', err);
@@ -611,7 +611,7 @@ export function stopPolling(): void {
     console.log('⚠️ @echo polling not running');
     return;
   }
-  
+
   clearInterval(pollInterval);
   pollInterval = null;
   console.log('🛑 @echo polling stopped');
