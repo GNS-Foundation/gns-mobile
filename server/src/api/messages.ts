@@ -471,7 +471,13 @@ router.get('/inbox', verifyGnsAuth, async (req: AuthenticatedRequest, res: Respo
           env.encryptedPayload = JSON.stringify(env.encryptedPayload);
         }
 
-        return env;
+        // ALWAYS include from_pk for grouping
+        return {
+          ...env,
+          from_pk: m.from_pk,
+          fromPublicKey: env.fromPublicKey || m.from_pk,
+          created_at: m.created_at,
+        };
       }),
       total: messages.length,
     } as ApiResponse);
