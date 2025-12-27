@@ -544,6 +544,32 @@ export async function getInbox(pkRoot: string, limit = 50): Promise<DbMessage[]>
   return data as DbMessage[];
 }
 
+/**
+ * Get conversation between two users
+ */
+export async function getConversation(
+  pk1: string,
+  pk2: string,
+  limit = 50
+): Promise<DbMessage[]> {
+  const pk1Lower = pk1.toLowerCase();
+  const pk2Lower = pk2.toLowerCase();
+
+  const { data, error } = await getSupabase()
+    .from('messages')
+    .select('*')
+    .or(`and(from_pk.eq.${pk1Lower},to_pk.eq.${pk2Lower}),and(from_pk.eq.${pk2Lower},to_pk.eq.${pk1Lower})`)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('Error fetching conversation:', error);
+    throw error;
+  }
+
+  return (data as DbMessage[]).reverse(); // Return oldest first
+}
+
 export async function markMessageDelivered(messageId: string): Promise<void> {
   const { error } = await getSupabase()
     .from('messages')

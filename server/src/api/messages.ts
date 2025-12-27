@@ -678,6 +678,60 @@ router.get('/thread/:threadId', verifyGnsAuth, async (req: AuthenticatedRequest,
 });
 
 /**
+ * GET /messages/conversation
+ * Get messages between authenticated user and another user
+ */
+router.get('/conversation', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pk = req.gnsPublicKey!;
+    const withPk = (req.query.with as string)?.toLowerCase();
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+
+    if (!withPk || !isValidPublicKey(withPk)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid or missing "with" public key',
+      } as ApiResponse);
+    }
+
+    // Get messages where user is sender or recipient with the other party
+    const messages = await db.getConversation(pk, withPk, limit);
+
+    return res.json({
+      success: true,
+      data: messages.map(m => {
+        const env = m.envelope || {
+          id: m.id,
+          fromPublicKey: m.from_pk,
+          toPublicKeys: [m.to_pk],
+          payloadType: 'gns/text.plain',
+          encryptedPayload: m.payload,
+          timestamp: new Date(m.created_at).getTime(),
+        };
+
+        if (env.encryptedPayload && typeof env.encryptedPayload === 'object') {
+          env.encryptedPayload = JSON.stringify(env.encryptedPayload);
+        }
+
+        return {
+          ...env,
+          from_pk: m.from_pk,
+          to_pk: m.to_pk,
+          created_at: m.created_at,
+        };
+      }),
+    } as ApiResponse);
+
+  } catch (error) {
+    console.error('GET /messages/conversation error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    } as ApiResponse);
+  }
+});
+
+/**
  * GET /messages/presence/:publicKey
  * Get user presence
  */
