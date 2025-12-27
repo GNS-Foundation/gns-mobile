@@ -1932,7 +1932,7 @@ export async function getAliasByIdentity(publicKey: string): Promise<{ handle: s
   const { data, error } = await getSupabase()
     .from('aliases')
     .select('handle')
-    .eq('identity', publicKey.toLowerCase())
+    .eq('pk_root', publicKey.toLowerCase())
     .single();
 
   if (error && error.code !== 'PGRST116') {
