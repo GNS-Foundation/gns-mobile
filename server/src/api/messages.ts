@@ -101,6 +101,53 @@ const connectedClients = new Map<string, Set<WebSocket>>();
 export { connectedClients };
 
 // ===========================================
+// GET /messages - Fetch pending messages (for MOBILE)
+// ===========================================
+
+router.get('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pk = req.gnsPublicKey!;
+    const since = req.query.since as string | undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 200);
+
+    console.log(`📥 Fetching pending messages for: ${pk.substring(0, 16)}...`);
+
+    // Get pending envelopes for this recipient
+    const messages = await db.getPendingEnvelopes(pk, since, limit);
+
+    console.log(`   Found ${messages.length} pending messages`);
+
+    // Transform to envelope format expected by mobile
+    const envelopes = messages.map((m: any) => ({
+      id: m.id,
+      fromPublicKey: m.from_pk,
+      toPublicKeys: [m.to_pk],
+      envelope: m.envelope,
+      encryptedPayload: m.envelope?.encryptedPayload || m.payload,
+      ephemeralPublicKey: m.envelope?.ephemeralPublicKey,
+      nonce: m.envelope?.nonce,
+      signature: m.envelope?.signature || m.signature,
+      timestamp: new Date(m.created_at).getTime(),
+      threadId: m.thread_id,
+      payloadType: m.envelope?.payloadType || 'gns/text.plain',
+    }));
+
+    return res.json({
+      success: true,
+      data: envelopes,
+      count: envelopes.length,
+    } as ApiResponse);
+
+  } catch (error) {
+    console.error('GET /messages error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    } as ApiResponse);
+  }
+});
+
+// ===========================================
 // POST /messages/send - DUAL ENCRYPTED SEND
 // ===========================================
 
