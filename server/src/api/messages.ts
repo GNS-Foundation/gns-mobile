@@ -1,15 +1,15 @@
 // ===========================================
-// GNS NODE - MESSAGES API (UPGRADED)
-// /messages endpoints + WebSocket
+// GNS NODE - MESSAGES API (DUAL ENCRYPTION)
 // 
-// CHANGES FROM ORIGINAL:
-// - Added /api/v1/messages (envelope-based)
-// - Added WebSocket support
-// - Added typing indicators
-// - Added presence
-// - Kept original endpoints for backward compatibility
+// Supports DUAL encrypted messages:
+// - One copy for recipient (they decrypt)
+// - One copy for sender (we decrypt our sent messages)
 // 
-// FIXED: Route order - specific routes BEFORE wildcard /:to_pk
+// Endpoints:
+// - POST /messages/send (session auth) - Send dual-encrypted message
+// - GET /messages/inbox (session auth) - Fetch inbox
+// - GET /messages/conversation (session auth) - Fetch conversation
+// - + Legacy endpoints for backward compatibility
 // ===========================================
 
 import { Router, Request, Response } from 'express';
@@ -20,91 +20,71 @@ import { ApiResponse, DbMessage } from '../types';
 import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import { Server } from 'http';
+import echoBot from '../services/echo_bot';
 
 const router = Router();
 
 // ===========================================
-// WEBSOCKET STATE
-// ===========================================
-
-// Connected clients: Map<publicKey, Set<WebSocket>>
-const connectedClients = new Map<string, Set<WebSocket>>();
-
-// Export for use in index.ts
-export { connectedClients };
-
-// ===========================================
-// AUTH MIDDLEWARE
+// SESSION TOKEN VALIDATION
 // ===========================================
 
 interface AuthenticatedRequest extends Request {
   gnsPublicKey?: string;
-  browserSession?: any;
+  gnsSession?: string;
 }
 
 /**
- * Verify authentication - supports both browser sessions and signature-based auth
- * 
- * Browser clients (authenticated via QR):
- *   X-GNS-Session: session token from browser pairing
- * 
- * Mobile/native clients (signature-based):
- *   X-GNS-PublicKey: sender's public key (hex)
- *   X-GNS-Timestamp: unix timestamp (ms)
- *   X-GNS-Signature: signature of "timestamp:publicKey"
+ * Verify session token from QR pairing
  */
-const verifyAuth = async (
+const verifySessionAuth = async (
   req: AuthenticatedRequest,
   res: Response,
   next: Function
 ) => {
   try {
-    // Try browser session first
     const sessionToken = req.headers['x-gns-session'] as string;
+    const publicKey = (req.headers['x-gns-publickey'] as string)?.toLowerCase();
 
-    if (sessionToken) {
-      // Browser session authentication
+    if (sessionToken && publicKey) {
+      // Validate session token exists in database
       const session = await db.getBrowserSession(sessionToken);
 
-      if (!session || !session.isActive) {
-        return res.status(401).json({
-          success: false,
-          error: 'Invalid or expired session',
-        } as ApiResponse);
+      if (session && session.public_key?.toLowerCase() === publicKey && session.status === 'approved') {
+        req.gnsPublicKey = publicKey;
+        req.gnsSession = sessionToken;
+        return next();
       }
-
-      // Check expiry
-      if (new Date() > session.expiresAt) {
-        await db.revokeBrowserSession(sessionToken);
-        return res.status(401).json({
-          success: false,
-          error: 'Session expired',
-        } as ApiResponse);
-      }
-
-      // Update last used
-      await db.updateBrowserSessionLastUsed(sessionToken);
-
-      // Attach to request
-      req.browserSession = session;
-      req.gnsPublicKey = session.publicKey;
-      return next();
     }
 
-    // Fall back to signature-based auth
+    // Fallback to legacy auth
+    return verifyGnsAuth(req, res, next);
+  } catch (error) {
+    console.error('Session auth error:', error);
+    return verifyGnsAuth(req, res, next);
+  }
+};
+
+/**
+ * Legacy GNS authentication headers
+ */
+const verifyGnsAuth = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: Function
+) => {
+  try {
     const publicKey = (req.headers['x-gns-publickey'] as string)?.toLowerCase();
     const identity = (req.headers['x-gns-identity'] as string)?.toLowerCase();
+
     const pk = publicKey || identity;
 
     if (!pk || !isValidPublicKey(pk)) {
       return res.status(401).json({
         success: false,
-        error: 'Missing authentication (X-GNS-Session or X-GNS-PublicKey required)',
+        error: 'Missing or invalid X-GNS-PublicKey header',
       } as ApiResponse);
     }
 
-    // For now, trust the public key
-    // TODO: Verify signature in production
     req.gnsPublicKey = pk;
     next();
   } catch (error) {
@@ -113,271 +93,101 @@ const verifyAuth = async (
   }
 };
 
-/**
- * Legacy signature-based auth (kept for backward compatibility)
- */
-const verifyGnsAuth = verifyAuth;
-
 // ===========================================
-// SPECIFIC ROUTES (MUST BE BEFORE WILDCARD)
+// WEBSOCKET STATE
 // ===========================================
 
-/**
- * POST /messages/ack
- * Acknowledge message receipt (batch)
- */
-router.post('/ack', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { messageIds } = req.body;
-    const pk = req.gnsPublicKey!;
+const connectedClients = new Map<string, Set<WebSocket>>();
+export { connectedClients };
 
-    if (!messageIds || !Array.isArray(messageIds)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid messageIds',
-      } as ApiResponse);
-    }
-
-    const acknowledged = await db.acknowledgeMessages(pk, messageIds);
-
-    return res.json({
-      success: true,
-      data: { acknowledged },
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('POST /messages/ack error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-/**
- * POST /messages/read
- * Mark messages as read
- */
-router.post('/read', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { messageIds } = req.body;
-    const pk = req.gnsPublicKey!;
-
-    if (!messageIds || !Array.isArray(messageIds)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid messageIds',
-      } as ApiResponse);
-    }
-
-    const marked = await db.markMessagesRead(pk, messageIds);
-
-    // Notify senders about read status
-    // TODO: Get sender keys and notify them
-
-    return res.json({
-      success: true,
-      data: { markedRead: marked },
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('POST /messages/read error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-/**
- * POST /messages/typing
- * Update typing status
- */
-router.post('/typing', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { threadId, isTyping } = req.body;
-    const pk = req.gnsPublicKey!;
-
-    if (!threadId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing threadId',
-      } as ApiResponse);
-    }
-
-    await db.updateTypingStatus(threadId, pk, isTyping);
-
-    // Broadcast via WebSocket to thread participants
-    broadcastTyping(threadId, pk, isTyping);
-
-    return res.json({ success: true } as ApiResponse);
-
-  } catch (error) {
-    console.error('POST /messages/typing error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-/**
- * POST /messages/presence
- * Update presence status
- */
-router.post('/presence', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { status, deviceInfo } = req.body;
-    const pk = req.gnsPublicKey!;
-
-    await db.updatePresence(pk, status || 'online', deviceInfo);
-
-    return res.json({ success: true } as ApiResponse);
-
-  } catch (error) {
-    console.error('POST /messages/presence error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
+// ===========================================
+// POST /messages/send - DUAL ENCRYPTED SEND
+// ===========================================
 
 /**
  * POST /messages/send
- * Simplified message sending for QR-paired browsers
- * NOW SUPPORTS: Full encrypted envelopes
+ * Send a dual-encrypted message (session token auth)
+ * 
+ * Body:
+ *   to: recipient public key
+ *   envelope: encrypted envelope with BOTH copies
+ *   threadId: optional thread ID
  */
-router.post('/send', async (req: Request, res: Response) => {
+router.post('/send', verifySessionAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const sessionToken = req.headers['x-gns-session'] as string;
-    const publicKey = (req.headers['x-gns-publickey'] as string)?.toLowerCase();
+    const { to, envelope, threadId } = req.body;
+    const senderPk = req.gnsPublicKey!;
 
-    if (!sessionToken) {
-      return res.status(401).json({
-        success: false,
-        error: 'Missing X-GNS-Session header',
-      } as ApiResponse);
-    }
-
-    // Verify session is valid
-    const session = await db.getBrowserSession(sessionToken);
-
-    if (!session || !session.isActive) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid or expired session',
-      } as ApiResponse);
-    }
-
-    // Verify publicKey matches session (if provided)
-    if (publicKey && session.publicKey !== publicKey) {
-      return res.status(401).json({
-        success: false,
-        error: 'Public key mismatch',
-      } as ApiResponse);
-    }
-
-    // Check session expiry
-    if (new Date() > session.expiresAt) {
-      await db.revokeBrowserSession(sessionToken);
-      return res.status(401).json({
-        success: false,
-        error: 'Session expired',
-      } as ApiResponse);
-    }
-
-    // Update last used
-    await db.updateBrowserSessionLastUsed(sessionToken);
-
-    // Get message content - supports both encrypted envelope and plaintext
-    const { to, envelope, content, threadId } = req.body;
-
-    if (!to) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required field: to',
-      } as ApiResponse);
-    }
-
-    if (!isValidPublicKey(to)) {
+    if (!to || !isValidPublicKey(to)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid recipient public key',
       } as ApiResponse);
     }
 
-    const recipientKey = to.toLowerCase();
-    const senderHandle = session.handle || session.publicKey.substring(0, 8);
-
-    // Check if we received an encrypted envelope (preferred) or plaintext (legacy)
-    let messageEnvelope;
-    let isEncrypted = false;
-
-    if (envelope && envelope.encryptedPayload && envelope.ephemeralPublicKey && envelope.nonce) {
-      // ✅ ENCRYPTED ENVELOPE - Use as-is
-      console.log(`📨 Encrypted message: ${senderHandle} → ${recipientKey.substring(0, 8)}...`);
-      messageEnvelope = {
-        ...envelope,
-        fromPublicKey: session.publicKey,  // Ensure sender matches session
-        fromHandle: senderHandle,
-      };
-      isEncrypted = true;
-    } else if (content) {
-      // ⚠️ PLAINTEXT FALLBACK - Create simple envelope (not recommended)
-      console.log(`⚠️ Plaintext message: ${senderHandle} → ${recipientKey.substring(0, 8)}...`);
-      console.log(`   WARNING: Message is NOT end-to-end encrypted!`);
-
-      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const actualThreadId = threadId || `thread_${session.publicKey}_${recipientKey}`;
-
-      messageEnvelope = {
-        id: messageId,
-        type: 'direct',
-        fromPublicKey: session.publicKey,
-        fromHandle: senderHandle,
-        toPublicKeys: [recipientKey],
-        payloadType: 'gns/text.plain',
-        encryptedPayload: content,  // NOT ENCRYPTED!
-        threadId: actualThreadId,
-        timestamp: Date.now(),
-        // Mark as plaintext for echo bot
-        _plaintext: true,
-      };
-      isEncrypted = false;
-    } else {
+    if (!envelope) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required field: envelope or content',
+        error: 'Missing envelope',
       } as ApiResponse);
     }
 
-    const actualThreadId = messageEnvelope.threadId || threadId || `thread_${session.publicKey}_${recipientKey}`;
+    const toPk = to.toLowerCase();
 
-    // Store message in database
-    const message = await db.createEnvelopeMessage(
-      session.publicKey,
-      recipientKey,
-      messageEnvelope,
-      actualThreadId
-    );
+    // Extract encryption fields from envelope
+    const messageData = {
+      from_pk: senderPk,
+      to_pk: toPk,
+      envelope: envelope,
+      thread_id: threadId || envelope.threadId || null,
 
-    // Deliver via WebSocket if recipient is connected
-    notifyRecipients([recipientKey], {
+      // Recipient encryption (existing)
+      encrypted_payload: envelope.encryptedPayload,
+      ephemeral_public_key: envelope.ephemeralPublicKey,
+      nonce: envelope.nonce,
+
+      // Sender encryption (NEW - for dual encryption)
+      sender_encrypted_payload: envelope.senderEncryptedPayload || null,
+      sender_ephemeral_public_key: envelope.senderEphemeralPublicKey || null,
+      sender_nonce: envelope.senderNonce || null,
+    };
+
+    // Store message with dual encryption
+    const message = await db.createDualEncryptedMessage(messageData);
+
+    console.log(`📧 DUAL encrypted message: ${senderPk.substring(0, 8)}... → ${toPk.substring(0, 8)}...`);
+    console.log(`   Has sender copy: ${!!envelope.senderEncryptedPayload}`);
+
+    // Notify recipient via WebSocket
+    notifyRecipients([toPk], {
       type: 'message',
-      data: messageEnvelope,
+      from_pk: senderPk,
+      envelope: envelope,
     });
 
-    return res.json({
+    // Check if recipient is @echo bot
+    const echoHandle = echoBot.getHandle();
+    if (echoHandle && toPk === echoHandle.publicKey.toLowerCase()) {
+      console.log('🤖 Message to @echo - triggering echo response');
+
+      // Async echo response
+      setTimeout(async () => {
+        try {
+          await echoBot.handleMessage(senderPk, envelope);
+        } catch (err) {
+          console.error('Echo bot error:', err);
+        }
+      }, 500);
+    }
+
+    return res.status(201).json({
       success: true,
-      message: isEncrypted ? 'Encrypted message sent' : 'Message sent (plaintext)',
       data: {
-        messageId: messageEnvelope.id,
-        threadId: actualThreadId,
-        timestamp: messageEnvelope.timestamp,
-        created_at: message.created_at,
-        encrypted: isEncrypted,
+        messageId: message.id,
+        threadId: message.thread_id,
+        dualEncrypted: !!envelope.senderEncryptedPayload,
       },
+      message: 'Message sent',
     } as ApiResponse);
 
   } catch (error) {
@@ -390,7 +200,152 @@ router.post('/send', async (req: Request, res: Response) => {
 });
 
 // ===========================================
-// WILDCARD ROUTE (MUST BE AFTER SPECIFIC ROUTES)
+// GET /messages/conversation - DUAL DECRYPTION
+// ===========================================
+
+/**
+ * GET /messages/conversation
+ * Fetch conversation with a specific user
+ * Returns the correct encrypted copy for each message
+ * 
+ * Query:
+ *   with: other party's public key
+ *   limit: max messages (default 50)
+ *   before: pagination cursor
+ */
+router.get('/conversation', verifySessionAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pk = req.gnsPublicKey!;
+    const withPk = (req.query.with as string)?.toLowerCase();
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const before = req.query.before as string | undefined;
+
+    if (!withPk || !isValidPublicKey(withPk)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid "with" public key',
+      } as ApiResponse);
+    }
+
+    // Get all messages between these two users
+    const messages = await db.getConversation(pk, withPk, limit, before);
+
+    // Transform messages - return correct encrypted copy based on direction
+    const transformed = messages.map((m: any) => {
+      const isOutgoing = m.from_pk?.toLowerCase() === pk;
+
+      // Build envelope with correct encryption fields
+      const envelope: any = {
+        id: m.id,
+        fromPublicKey: m.from_pk,
+        toPublicKeys: [m.to_pk],
+        timestamp: new Date(m.created_at).getTime(),
+        threadId: m.thread_id,
+      };
+
+      if (isOutgoing && m.sender_encrypted_payload) {
+        // OUTGOING: Use sender's encrypted copy (we can decrypt)
+        envelope.encryptedPayload = m.sender_encrypted_payload;
+        envelope.ephemeralPublicKey = m.sender_ephemeral_public_key;
+        envelope.nonce = m.sender_nonce;
+        envelope.isSenderCopy = true;
+      } else {
+        // INCOMING: Use recipient's encrypted copy OR legacy envelope
+        const env = m.envelope || {};
+        envelope.encryptedPayload = env.encryptedPayload || m.encrypted_payload;
+        envelope.ephemeralPublicKey = env.ephemeralPublicKey || m.ephemeral_public_key;
+        envelope.nonce = env.nonce || m.nonce;
+      }
+
+      return {
+        id: m.id,
+        from_pk: m.from_pk,
+        to_pk: m.to_pk,
+        created_at: m.created_at,
+        thread_id: m.thread_id,
+        isOutgoing: isOutgoing,
+        envelope: envelope,
+        // Also include at top level for easier access
+        encryptedPayload: envelope.encryptedPayload,
+        ephemeralPublicKey: envelope.ephemeralPublicKey,
+        nonce: envelope.nonce,
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: transformed,
+      count: transformed.length,
+      hasMore: transformed.length >= limit,
+    } as ApiResponse);
+
+  } catch (error) {
+    console.error('GET /messages/conversation error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    } as ApiResponse);
+  }
+});
+
+// ===========================================
+// GET /messages/inbox - INBOX WITH DUAL SUPPORT
+// ===========================================
+
+router.get('/inbox', verifySessionAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pk = req.gnsPublicKey!;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const since = req.query.since as string | undefined;
+
+    // Get all messages where user is sender OR recipient
+    const messages = await db.getAllUserMessages(pk, limit, since);
+
+    // Transform with correct encryption copy
+    const transformed = messages.map((m: any) => {
+      const isOutgoing = m.from_pk?.toLowerCase() === pk;
+
+      const envelope: any = m.envelope || {
+        id: m.id,
+        fromPublicKey: m.from_pk,
+        toPublicKeys: [m.to_pk],
+        timestamp: new Date(m.created_at).getTime(),
+      };
+
+      // Use sender copy for outgoing messages
+      if (isOutgoing && m.sender_encrypted_payload) {
+        envelope.encryptedPayload = m.sender_encrypted_payload;
+        envelope.ephemeralPublicKey = m.sender_ephemeral_public_key;
+        envelope.nonce = m.sender_nonce;
+      }
+
+      return {
+        ...envelope,
+        id: m.id,
+        from_pk: m.from_pk,
+        to_pk: m.to_pk,
+        created_at: m.created_at,
+        isOutgoing: isOutgoing,
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: transformed,
+      total: transformed.length,
+    } as ApiResponse);
+
+  } catch (error) {
+    console.error('GET /messages/inbox error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    } as ApiResponse);
+  }
+});
+
+// ===========================================
+// LEGACY ENDPOINTS (Backward Compatible)
 // ===========================================
 
 // POST /messages/:to_pk - Send message (original format)
@@ -467,86 +422,7 @@ router.post('/:to_pk', async (req: Request, res: Response) => {
   }
 });
 
-// ===========================================
-// OTHER ORIGINAL ENDPOINTS
-// ===========================================
-
-// GET /messages/inbox - Fetch pending (original format)
-router.get('/inbox', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const pk = req.gnsPublicKey!;
-    const messages = await db.getInbox(pk);
-
-    return res.json({
-      success: true,
-      data: messages.map(m => {
-        // Prioritize full envelope if it exists, otherwise fallback to old format
-        const env = m.envelope || {
-          id: m.id,
-          fromPublicKey: m.from_pk,
-          toPublicKeys: [m.to_pk],
-          payloadType: 'gns/text.plain',
-          encryptedPayload: m.payload,
-          timestamp: new Date(m.created_at).getTime(),
-          signature: m.signature,
-        };
-
-        // CRITICAL: Ensure encryptedPayload is a string, not an object
-        // JSONB may parse JSON-like strings into objects
-        if (env.encryptedPayload && typeof env.encryptedPayload === 'object') {
-          env.encryptedPayload = JSON.stringify(env.encryptedPayload);
-        }
-
-        // ✅ FIX: ALWAYS include from_pk for grouping in browser
-        return {
-          ...env,
-          from_pk: m.from_pk,
-          fromPublicKey: env.fromPublicKey || m.from_pk,
-          to_pk: m.to_pk,
-          created_at: m.created_at,
-          id: m.id,
-        };
-      }),
-      total: messages.length,
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('GET /messages/inbox error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-// DELETE /messages/:id - Acknowledge (original format)
-router.delete('/:id', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const messageId = req.params.id;
-    await db.markMessageDelivered(messageId);
-
-    return res.json({
-      success: true,
-      message: 'Message acknowledged',
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('DELETE /messages/:id error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-// ===========================================
-// NEW ENVELOPE-BASED ENDPOINTS
-// ===========================================
-
-/**
- * POST /messages
- * Send envelope-based message (new format)
- */
+// POST /messages - Envelope-based message (legacy)
 router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { envelope, recipients } = req.body;
@@ -558,7 +434,6 @@ router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response)
       } as ApiResponse);
     }
 
-    // Verify sender matches authenticated user
     const senderKey = envelope.fromPublicKey?.toLowerCase();
     if (senderKey !== req.gnsPublicKey) {
       return res.status(403).json({
@@ -567,7 +442,6 @@ router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response)
       } as ApiResponse);
     }
 
-    // Get recipients from envelope or request body
     const recipientList: string[] = recipients ||
       [...(envelope.toPublicKeys || []), ...(envelope.ccPublicKeys || [])];
 
@@ -578,7 +452,6 @@ router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response)
       } as ApiResponse);
     }
 
-    // Store message for each recipient
     const storedIds: string[] = [];
 
     for (const recipientKey of recipientList) {
@@ -590,7 +463,6 @@ router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response)
       );
       storedIds.push(message.id);
 
-      // Notify via WebSocket
       notifyRecipients([recipientKey], {
         type: 'message',
         envelope: envelope,
@@ -617,47 +489,19 @@ router.post('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response)
   }
 });
 
-/**
- * GET /messages
- * Fetch pending messages (envelope format)
- */
-router.get('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
+// DELETE /messages/:id - Acknowledge
+router.delete('/:id', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const pk = req.gnsPublicKey!;
-    const since = req.query.since as string | undefined;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-
-    const messages = await db.getPendingEnvelopes(pk, since, limit);
+    const messageId = req.params.id;
+    await db.markMessageDelivered(messageId);
 
     return res.json({
       success: true,
-      messages: messages.map(m => {
-        const env = m.envelope || {
-          // Fallback for old-format messages without envelope column
-          id: m.id,
-          fromPublicKey: m.from_pk,
-          toPublicKeys: [m.to_pk],
-          payloadType: 'gns/text.plain',
-          encryptedPayload: m.payload,
-          timestamp: new Date(m.created_at).getTime(),
-          signature: m.signature,
-        };
-
-        // CRITICAL FIX: Ensure encryptedPayload is a string, not an object
-        // JSONB may parse JSON-like strings into objects, but for signature verification
-        // to work, encryptedPayload MUST be a string (the ciphertext)
-        if (env.encryptedPayload && typeof env.encryptedPayload === 'object') {
-          env.encryptedPayload = JSON.stringify(env.encryptedPayload);
-        }
-
-        return env;
-      }),
-      count: messages.length,
-      hasMore: messages.length >= limit,
+      message: 'Message acknowledged',
     } as ApiResponse);
 
   } catch (error) {
-    console.error('GET /messages error:', error);
+    console.error('DELETE /messages/:id error:', error);
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -665,149 +509,30 @@ router.get('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) 
   }
 });
 
-/**
- * GET /messages/thread/:threadId
- * Get messages in a thread
- */
-router.get('/thread/:threadId', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { threadId } = req.params;
-    const pk = req.gnsPublicKey!;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-    const before = req.query.before as string | undefined;
+// ===========================================
+// NOTIFICATION HELPERS
+// ===========================================
 
-    const messages = await db.getThreadMessages(threadId, pk, limit, before);
+export function notifyRecipients(publicKeys: string[], message: any) {
+  const data = JSON.stringify(message);
 
-    return res.json({
-      success: true,
-      messages: messages.map(m => {
-        const env = m.envelope || {
-          id: m.id,
-          fromPublicKey: m.from_pk,
-          toPublicKeys: [m.to_pk],
-          payloadType: 'gns/text.plain',
-          encryptedPayload: m.payload,
-          timestamp: new Date(m.created_at).getTime(),
-          signature: m.signature,
-        };
-
-        // CRITICAL: Ensure encryptedPayload is a string, not an object
-        if (env.encryptedPayload && typeof env.encryptedPayload === 'object') {
-          env.encryptedPayload = JSON.stringify(env.encryptedPayload);
+  for (const key of publicKeys) {
+    const normalizedKey = key.toLowerCase();
+    const clients = connectedClients.get(normalizedKey);
+    if (clients) {
+      clients.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
         }
-
-        return env;
-      }),
-      count: messages.length,
-      hasMore: messages.length >= limit,
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('GET /messages/thread/:threadId error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
-
-/**
- * GET /messages/conversation
- * Get messages between authenticated user and another user
- */
-router.get('/conversation', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const pk = req.gnsPublicKey!;
-    const withPk = (req.query.with as string)?.toLowerCase();
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-
-    if (!withPk || !isValidPublicKey(withPk)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid or missing "with" public key',
-      } as ApiResponse);
+      });
     }
-
-    // Get messages where user is sender or recipient with the other party
-    const messages = await db.getConversation(pk, withPk, limit);
-
-    return res.json({
-      success: true,
-      data: messages.map(m => {
-        const env = m.envelope || {
-          id: m.id,
-          fromPublicKey: m.from_pk,
-          toPublicKeys: [m.to_pk],
-          payloadType: 'gns/text.plain',
-          encryptedPayload: m.payload,
-          timestamp: new Date(m.created_at).getTime(),
-        };
-
-        if (env.encryptedPayload && typeof env.encryptedPayload === 'object') {
-          env.encryptedPayload = JSON.stringify(env.encryptedPayload);
-        }
-
-        return {
-          ...env,
-          from_pk: m.from_pk,
-          to_pk: m.to_pk,
-          created_at: m.created_at,
-        };
-      }),
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('GET /messages/conversation error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
   }
-});
-
-/**
- * GET /messages/presence/:publicKey
- * Get user presence
- */
-router.get('/presence/:publicKey', async (req: Request, res: Response) => {
-  try {
-    const pk = req.params.publicKey?.toLowerCase();
-
-    if (!isValidPublicKey(pk)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid public key',
-      } as ApiResponse);
-    }
-
-    const presence = await db.getPresence(pk);
-
-    return res.json({
-      success: true,
-      data: presence || {
-        publicKey: pk,
-        status: 'offline',
-        lastSeen: null,
-      },
-    } as ApiResponse);
-
-  } catch (error) {
-    console.error('GET /messages/presence/:publicKey error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    } as ApiResponse);
-  }
-});
+}
 
 // ===========================================
 // WEBSOCKET SETUP
 // ===========================================
 
-/**
- * Setup WebSocket server
- * Call from index.ts: setupWebSocket(httpServer)
- */
 export function setupWebSocket(server: Server): WebSocketServer {
   const wss = new WebSocketServer({
     server,
@@ -815,25 +540,14 @@ export function setupWebSocket(server: Server): WebSocketServer {
   });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    // Parse auth from query params
     const url = new URL(req.url || '', `http://${req.headers.host}`);
     const publicKey = url.searchParams.get('pubkey')?.toLowerCase();
-    const timestamp = url.searchParams.get('timestamp');
-    const signature = url.searchParams.get('sig');
 
     if (!publicKey || !isValidPublicKey(publicKey)) {
       ws.close(4001, 'Missing or invalid public key');
       return;
     }
 
-    // TODO: Verify signature in production
-    // const message = `${timestamp}:${publicKey}`;
-    // if (!verifySignature(publicKey, message, signature)) {
-    //   ws.close(4002, 'Invalid signature');
-    //   return;
-    // }
-
-    // Register client
     if (!connectedClients.has(publicKey)) {
       connectedClients.set(publicKey, new Set());
     }
@@ -841,10 +555,8 @@ export function setupWebSocket(server: Server): WebSocketServer {
 
     console.log(`WebSocket connected: ${publicKey.substring(0, 16)}...`);
 
-    // Update presence
     db.updatePresence(publicKey, 'online').catch(console.error);
 
-    // Handle messages
     ws.on('message', async (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
@@ -854,7 +566,6 @@ export function setupWebSocket(server: Server): WebSocketServer {
       }
     });
 
-    // Handle disconnect
     ws.on('close', () => {
       const clients = connectedClients.get(publicKey);
       if (clients) {
@@ -867,12 +578,10 @@ export function setupWebSocket(server: Server): WebSocketServer {
       console.log(`WebSocket disconnected: ${publicKey.substring(0, 16)}...`);
     });
 
-    // Handle errors
     ws.on('error', (error) => {
       console.error(`WebSocket error for ${publicKey.substring(0, 16)}...:`, error);
     });
 
-    // Send welcome
     ws.send(JSON.stringify({
       type: 'connected',
       publicKey,
@@ -880,7 +589,7 @@ export function setupWebSocket(server: Server): WebSocketServer {
     }));
   });
 
-  // Heartbeat to keep connections alive
+  // Heartbeat
   const heartbeatInterval = setInterval(() => {
     wss.clients.forEach((ws: WebSocket & { isAlive?: boolean }) => {
       if (ws.isAlive === false) {
@@ -906,9 +615,6 @@ export function setupWebSocket(server: Server): WebSocketServer {
   return wss;
 }
 
-/**
- * Handle incoming WebSocket message
- */
 async function handleWebSocketMessage(
   ws: WebSocket,
   publicKey: string,
@@ -920,7 +626,6 @@ async function handleWebSocketMessage(
       break;
 
     case 'message':
-      // Store and forward envelope
       const envelope = message.envelope;
       if (!envelope) break;
 
@@ -929,7 +634,6 @@ async function handleWebSocketMessage(
         ...(envelope.ccPublicKeys || []),
       ];
 
-      // Store for each recipient
       for (const recipientKey of recipients) {
         await db.createEnvelopeMessage(
           publicKey,
@@ -939,7 +643,6 @@ async function handleWebSocketMessage(
         );
       }
 
-      // Forward to connected recipients
       notifyRecipients(recipients, {
         type: 'message',
         envelope: envelope,
@@ -948,79 +651,8 @@ async function handleWebSocketMessage(
 
     case 'typing':
       await db.updateTypingStatus(message.threadId, publicKey, message.isTyping);
-      broadcastTyping(message.threadId, publicKey, message.isTyping);
-      break;
-
-    case 'ack':
-      // Notify sender about delivery
-      if (message.senderId) {
-        notifyRecipients([message.senderId], {
-          type: 'status',
-          messageId: message.messageId,
-          status: 'delivered',
-        });
-      }
-      break;
-
-    case 'read':
-      // Notify sender about read
-      if (message.senderId) {
-        notifyRecipients([message.senderId], {
-          type: 'status',
-          messageId: message.messageId,
-          status: 'read',
-        });
-      }
       break;
   }
-}
-
-// ===========================================
-// NOTIFICATION HELPERS
-// ===========================================
-
-/**
- * Send message to specific recipients
- */
-export function notifyRecipients(publicKeys: string[], message: any) {
-  const data = JSON.stringify(message);
-
-  for (const key of publicKeys) {
-    const normalizedKey = key.toLowerCase();
-    const clients = connectedClients.get(normalizedKey);
-    if (clients) {
-      clients.forEach(ws => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
-        }
-      });
-    }
-  }
-}
-
-/**
- * Broadcast typing status
- */
-function broadcastTyping(threadId: string, fromPublicKey: string, isTyping: boolean) {
-  // For now, broadcast to all connected clients
-  // TODO: Track thread participants and only notify them
-  const data = JSON.stringify({
-    type: 'typing',
-    threadId,
-    fromPublicKey,
-    isTyping,
-    timestamp: Date.now(),
-  });
-
-  connectedClients.forEach((clients, key) => {
-    if (key !== fromPublicKey) {
-      clients.forEach(ws => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
-        }
-      });
-    }
-  });
 }
 
 export default router;

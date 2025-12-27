@@ -547,29 +547,6 @@ export async function getInbox(pkRoot: string, limit = 50): Promise<DbMessage[]>
 /**
  * Get conversation between two users
  */
-export async function getConversation(
-  pk1: string,
-  pk2: string,
-  limit = 50
-): Promise<DbMessage[]> {
-  const pk1Lower = pk1.toLowerCase();
-  const pk2Lower = pk2.toLowerCase();
-
-  const { data, error } = await getSupabase()
-    .from('messages')
-    .select('*')
-    .or(`and(from_pk.eq.${pk1Lower},to_pk.eq.${pk2Lower}),and(from_pk.eq.${pk2Lower},to_pk.eq.${pk1Lower})`)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error('Error fetching conversation:', error);
-    throw error;
-  }
-
-  return (data as DbMessage[]).reverse(); // Return oldest first
-}
-
 export async function markMessageDelivered(messageId: string): Promise<void> {
   const { error } = await getSupabase()
     .from('messages')
@@ -813,6 +790,153 @@ export async function getThreadMessages(
 
   // Return in chronological order
   return (data as DbMessage[]).reverse();
+}
+
+// ===========================================
+// DUAL ENCRYPTION SUPPORT
+// ===========================================
+
+/**
+ * Create message with DUAL encryption
+ * Stores both recipient copy and sender copy
+ */
+export async function createDualEncryptedMessage(messageData: {
+  from_pk: string;
+  to_pk: string;
+  envelope: any;
+  thread_id?: string | null;
+  encrypted_payload?: string;
+  ephemeral_public_key?: string;
+  nonce?: string;
+  sender_encrypted_payload?: string | null;
+  sender_ephemeral_public_key?: string | null;
+  sender_nonce?: string | null;
+}): Promise<DbMessage> {
+  const { data, error } = await getSupabase()
+    .from('messages')
+    .insert({
+      from_pk: messageData.from_pk.toLowerCase(),
+      to_pk: messageData.to_pk.toLowerCase(),
+
+      // Recipient encryption (existing fields)
+      payload: messageData.encrypted_payload || messageData.envelope?.encryptedPayload || '',
+      envelope: messageData.envelope,
+
+      // Sender encryption (NEW - dual encryption)
+      sender_encrypted_payload: messageData.sender_encrypted_payload || null,
+      sender_ephemeral_public_key: messageData.sender_ephemeral_public_key || null,
+      sender_nonce: messageData.sender_nonce || null,
+
+      thread_id: messageData.thread_id || messageData.envelope?.threadId || null,
+      status: 'pending',
+      relay_id: process.env.NODE_ID,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating dual encrypted message:', error);
+    throw error;
+  }
+
+  return data as DbMessage;
+}
+
+/**
+ * Get conversation between two users
+ * Returns all messages (both directions) with dual encryption fields
+ */
+export async function getConversation(
+  userPk: string,
+  otherPk: string,
+  limit: number = 50,
+  before?: string
+): Promise<any[]> {
+  const userPkLower = userPk.toLowerCase();
+  const otherPkLower = otherPk.toLowerCase();
+
+  let query = getSupabase()
+    .from('messages')
+    .select('*')
+    .or(
+      `and(from_pk.eq.${userPkLower},to_pk.eq.${otherPkLower}),` +
+      `and(from_pk.eq.${otherPkLower},to_pk.eq.${userPkLower})`
+    )
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (before) {
+    const beforeDate = new Date(parseInt(before)).toISOString();
+    query = query.lt('created_at', beforeDate);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error('Error fetching conversation:', error);
+    throw error;
+  }
+
+  // Return in chronological order (oldest first)
+  return (data || []).reverse();
+}
+
+/**
+ * Get all messages for a user (inbox + sent)
+ * For unified inbox view with dual encryption support
+ */
+export async function getAllUserMessages(
+  userPk: string,
+  limit: number = 50,
+  since?: string
+): Promise<any[]> {
+  const userPkLower = userPk.toLowerCase();
+
+  let query = getSupabase()
+    .from('messages')
+    .select('*')
+    .or(`from_pk.eq.${userPkLower},to_pk.eq.${userPkLower}`)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (since) {
+    const sinceDate = new Date(parseInt(since)).toISOString();
+    query = query.gt('created_at', sinceDate);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error('Error fetching all user messages:', error);
+    throw error;
+  }
+
+  return data || [];
+}
+
+/**
+ * Get browser session by token
+ * For session-based authentication
+ */
+export async function getBrowserSession(sessionToken: string): Promise<{
+  session_token: string;
+  public_key: string;
+  status: string;
+  created_at: string;
+  expires_at: string;
+} | null> {
+  const { data, error } = await getSupabase()
+    .from('browser_sessions')
+    .select('*')
+    .eq('session_token', sessionToken)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    console.error('Error fetching browser session:', error);
+    throw error;
+  }
+
+  return data;
 }
 
 // ===========================================
@@ -1815,24 +1939,6 @@ export async function createBrowserSession(input: BrowserSessionInput): Promise<
   }
 
   return mapBrowserSession(data);
-}
-
-/**
- * Get browser session by token
- */
-export async function getBrowserSession(sessionToken: string): Promise<BrowserSession | null> {
-  const { data, error } = await getSupabase()
-    .from('browser_sessions')
-    .select('*')
-    .eq('session_token', sessionToken)
-    .single();
-
-  if (error && error.code !== 'PGRST116') {
-    console.error('Error fetching browser session:', error);
-    throw error;
-  }
-
-  return data ? mapBrowserSession(data) : null;
 }
 
 /**
