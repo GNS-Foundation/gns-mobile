@@ -550,7 +550,10 @@ export async function getInbox(pkRoot: string, limit = 50): Promise<DbMessage[]>
 export async function markMessageDelivered(messageId: string): Promise<void> {
   const { error } = await getSupabase()
     .from('messages')
-    .update({ delivered_at: new Date().toISOString() })
+    .update({
+      delivered_at: new Date().toISOString(),
+      status: 'delivered'  // ✅ FIX: Also update status so getPendingEnvelopes filters it out
+    })
     .eq('id', messageId);
 
   if (error) {
