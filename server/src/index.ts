@@ -66,7 +66,8 @@ app.use(cors({
     'X-GNS-PublicKey',
     'X-GNS-Signature',
     'X-GNS-Timestamp',
-    'X-Webhook-Secret',  // 📧 NEW - for email webhook
+    'X-GNS-Session',
+    'X-Webhook-Secret',
   ],
 }));
 
