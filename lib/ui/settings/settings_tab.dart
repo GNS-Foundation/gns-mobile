@@ -21,6 +21,7 @@ import '../screens/debug_screen.dart';
 import '../financial/financial_settings_screen.dart';
 import '../financial/transactions_screen.dart';
 import '../messages/broadcast_screen.dart';
+import '../screens/org_registration_screen.dart';  // 🏢 Organization Registration
 
 // ==================== SETTINGS TAB ====================
 
@@ -138,6 +139,30 @@ class _SettingsTabState extends State<SettingsTab> {
           _buildThemeSection(),
           const SizedBox(height: 24),
 
+          // 🏢 Organization Registration
+          Card(
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.business, color: Colors.purple),
+              ),
+              title: const Text('Register Organization'),
+              subtitle: const Text('Claim your namespace@ with DNS verification'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const OrgRegistrationScreen()),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+
           Card(
             color: Colors.deepPurple.withValues(alpha: 0.1),
             child: ListTile(
@@ -155,23 +180,37 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
           const SizedBox(height: 16),
 
+          // 🏠 Home Hub Pairing (Coming Soon - replaces dangerous key export)
           Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.key),
-                  title: const Text('Export Identity'),
-                  subtitle: const Text('Backup your identity to another device'),
-                  onTap: () => _exportIdentity(context),
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.teal.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.download),
-                  title: const Text('Import Identity'),
-                  subtitle: const Text('Restore from backup'),
-                  onTap: () => _importIdentity(context),
+                child: const Icon(Icons.home, color: Colors.teal),
+              ),
+              title: const Text('Home Hub Pairing'),
+              subtitle: const Text('Sync identity to Raspberry Pi, TV, or backup device'),
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ],
+                child: const Text(
+                  'Coming Soon',
+                  style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600),
+                ),
+              ),
+              onTap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('🏠 Home Hub pairing coming soon! Securely sync your identity to trusted devices.'),
+                  ),
+                );
+              },
             ),
           ),
           const SizedBox(height: 16),
@@ -810,83 +849,9 @@ class _SettingsTabState extends State<SettingsTab> {
     );
   }
 
-  void _exportIdentity(BuildContext context) async {
-    try {
-      final data = await widget.wallet.exportIdentity();
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Export Identity'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Copy this code and save it securely:'),
-              const SizedBox(height: 8),
-              SelectableText(
-                data,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: data));
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Copied to clipboard')),
-                );
-              },
-              child: const Text('COPY'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: $e')),
-      );
-    }
-  }
-
-  void _importIdentity(BuildContext context) {
-    final controller = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Import Identity'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'Paste your backup code',
-          ),
-          maxLines: 4,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('CANCEL'),
-          ),
-          TextButton(
-            onPressed: () async {
-              try {
-                await widget.wallet.importIdentity(controller.text.trim());
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Identity imported!')),
-                );
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Import failed: $e')),
-                );
-              }
-            },
-            child: const Text('IMPORT'),
-          ),
-        ],
-      ),
-    );
-  }
+  // NOTE: Export/Import Identity functions removed for security.
+  // Raw key export is dangerous - anyone with the key IS you.
+  // Future: Home Hub secure pairing via local network/Bluetooth/NFC
 
   void _deleteIdentity(BuildContext context) {
     showDialog(

@@ -337,14 +337,18 @@ class GSiteService {
   // ----------------------------------------------------------
 
   /// Sign a message with Ed25519 private key
+  /// Returns signature as HEX string (128 chars) - required by backend
   Future<String> _signMessage(String message, List<int> privateKey) async {
     final algorithm = Ed25519();
-    final keyPair = await algorithm.newKeyPairFromSeed(privateKey);
+    // Ensure we only use the 32-byte seed
+    final seed = privateKey.length > 32 ? privateKey.sublist(0, 32) : privateKey;
+    final keyPair = await algorithm.newKeyPairFromSeed(seed);
     final signature = await algorithm.sign(
       utf8.encode(message),
       keyPair: keyPair,
     );
-    return base64Encode(signature.bytes);
+    // Convert to HEX (not base64!) - backend expects hex
+    return signature.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
   /// Dispose the HTTP client

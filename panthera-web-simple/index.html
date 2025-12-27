@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GNS - The Identity Layer the Internet Never Had</title>
+  <meta name="description" content="One @handle for messages, payments, and authentication. You own it, not Google. Open source identity protocol.">
+  <meta property="og:title" content="GNS / Globe Crumbs">
+  <meta property="og:description" content="One @handle you own forever—for messages, money, and login.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="/logo.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Lora:wght@400;500;600;700&family=Playfair+Display:wght@400;600;700&family=Lato:wght@400;500;700&family=Open+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    /* ========== BASE VARIABLES (Marketing Site) ========== */
+    :root {
+      --color-bg: #FAFBFC;
+      --color-bg-warm: #F0F4F7;
+      --color-bg-dark: #2D3436;
+      --color-text: #2D3436;
+      --color-text-muted: #636E72;
+      --color-primary: #00B4D8;
+      --color-primary-light: #48CAE4;
+      --color-primary-dark: #0096C7;
+      --color-border: #DFE6E9;
+      --color-border-dark: #B2BEC3;
+      --font-display: 'Crimson Pro', Georgia, serif;
+      --font-body: 'DM Sans', -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --space-xs: 4px; --space-sm: 8px; --space-md: 16px;
+      --space-lg: 24px; --space-xl: 48px; --space-2xl: 80px; --space-3xl: 120px;
+    }
+    
+    /* ========== THEME VARIABLES (gSite Viewer) ========== */
+    :root {
+      /* Default theme (profile-minimal) - overridden by JS */
+      --theme-primary: #000000;
+      --theme-primary-variant: #333333;
+      --theme-secondary: #666666;
+      --theme-surface: #FFFFFF;
+      --theme-surface-variant: #F8F8F8;
+      --theme-background: #FFFFFF;
+      --theme-on-primary: #FFFFFF;
+      --theme-on-surface: #000000;
+      --theme-on-background: #000000;
+      --theme-error: #D32F2F;
+      --theme-success: #388E3C;
+      --theme-warning: #F57C00;
+      --theme-info: #1976D2;
+      --theme-divider: #EEEEEE;
+      --theme-disabled: #BDBDBD;
+      --theme-shadow: rgba(0,0,0,0.05);
+      --theme-trust-low: #9E9E9E;
+      --theme-trust-medium: #FFC107;
+      --theme-trust-high: #4CAF50;
+      --theme-trust-verified: #2196F3;
+      --theme-font-primary: 'Inter', sans-serif;
+      --theme-font-secondary: 'Inter', sans-serif;
+      --theme-radius-sm: 4px;
+      --theme-radius-md: 8px;
+      --theme-radius-lg: 12px;
+      --theme-radius-xl: 16px;
+      --theme-radius-full: 9999px;
+      --theme-shadow-sm: 0 1px 2px rgba(0,0,0,0.03);
+      --theme-shadow-md: 0 2px 4px rgba(0,0,0,0.05);
+      --theme-shadow-lg: 0 4px 8px rgba(0,0,0,0.05);
+      --theme-cover-height: 0px;
+    }
+    
+    /* Dark mode overrides */
+    body.dark-mode {
+      --theme-background: #000000;
+      --theme-surface: #111111;
+      --theme-surface-variant: #1A1A1A;
+      --theme-on-background: #FFFFFF;
+      --theme-on-surface: #FFFFFF;
+      --theme-divider: #333333;
+      --theme-shadow: rgba(0,0,0,0.3);
+    }
+    
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--font-body);
+      background: var(--color-bg);
+      color: var(--color-text);
+      line-height: 1.6;
+    }
+    
+    h1, h2, h3 { font-family: var(--font-display); font-weight: 600; line-height: 1.15; }
+    h1 { font-size: clamp(2.5rem, 8vw, 5rem); }
+    h2 { font-size: clamp(2rem, 5vw, 3.5rem); }
+    h3 { font-size: clamp(1.25rem, 3vw, 1.75rem); }
+    p { font-size: 1.125rem; }
+    
+    a { color: var(--color-primary); text-decoration: none; transition: color 0.2s; }
+    a:hover { color: var(--color-primary-light); }
+    
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 var(--space-lg); }
+    section { padding: var(--space-3xl) 0; }
+    
+    /* Navigation */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      background: rgba(250, 251, 252, 0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--color-border);
+    }
+    .nav-inner {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: var(--space-md) var(--space-lg);
+      max-width: 1200px; margin: 0 auto;
+    }
+    .logo {
+      font-family: var(--font-display); font-size: 1.5rem; font-weight: 700;
+      color: var(--color-text); display: flex; align-items: center; gap: var(--space-sm);
+    }
+    .logo:hover { color: var(--color-text); }
+    .nav-links { display: flex; gap: var(--space-xl); list-style: none; align-items: center; }
+    .nav-links a { color: var(--color-text-muted); font-size: 0.95rem; font-weight: 500; }
+    .nav-links a:hover { color: var(--color-text); }
+    .nav-cta {
+      background: var(--color-text); color: white !important;
+      padding: var(--space-sm) var(--space-md); border-radius: 6px; font-weight: 600;
+    }
+    .nav-cta:hover { background: var(--color-primary); }
+    @media (max-width: 768px) { .nav-links { display: none; } }
+    
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; gap: var(--space-sm);
+      padding: var(--space-md) var(--space-lg); border-radius: 8px;
+      font-weight: 600; font-size: 1rem; transition: all 0.2s; cursor: pointer; border: none;
+    }
+    .btn-primary { background: var(--color-primary); color: white; }
+    .btn-primary:hover { background: var(--color-primary-dark); color: white; transform: translateY(-2px); }
+    .btn-secondary { background: transparent; color: var(--color-text); border: 2px solid var(--color-border-dark); }
+    .btn-secondary:hover { border-color: var(--color-text); }
+    
+    /* Hero */
+    .hero {
+      min-height: 100vh; display: flex; align-items: center;
+      padding-top: 80px; position: relative; overflow: hidden;
+    }
+    .hero::before {
+      content: ''; position: absolute; top: -50%; right: -20%;
+      width: 80%; height: 150%;
+      background: radial-gradient(ellipse at center, rgba(0, 180, 216, 0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero .container {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: var(--space-2xl); align-items: center;
+    }
+    @media (max-width: 900px) {
+      .hero .container { grid-template-columns: 1fr; }
+      .handle-demo { display: none; }
+    }
+    .hero-content { position: relative; z-index: 1; }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: var(--space-sm);
+      background: white; border: 1px solid var(--color-border);
+      padding: var(--space-sm) var(--space-md); border-radius: 50px;
+      font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: var(--space-lg);
+    }
+    .hero-badge::before { content: ''; width: 8px; height: 8px; background: #10B981; border-radius: 50%; }
+    .hero h1 span { color: var(--color-primary); }
+    .hero-text { color: var(--color-text-muted); margin: var(--space-lg) 0 var(--space-xl); max-width: 540px; }
+    .hero-actions { display: flex; gap: var(--space-md); flex-wrap: wrap; }
+    
+    /* Handle Card */
+    .handle-card {
+      background: white; border-radius: 16px; padding: var(--space-lg);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1); max-width: 320px; margin-left: auto;
+    }
+    .handle-header { display: flex; align-items: center; gap: var(--space-md); margin-bottom: var(--space-lg); }
+    .handle-avatar {
+      width: 48px; height: 48px; background: var(--color-primary-light);
+      border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem;
+    }
+    .handle-info h4 { font-family: var(--font-body); font-size: 1.125rem; font-weight: 600; }
+    .handle-info p { font-size: 0.875rem; color: var(--color-text-muted); }
+    .handle-features { display: flex; flex-direction: column; gap: var(--space-sm); }
+    .handle-feature {
+      display: flex; align-items: center; gap: var(--space-md);
+      padding: var(--space-sm) var(--space-md); background: var(--color-bg);
+      border-radius: 8px; font-size: 0.95rem; color: var(--color-text);
+    }
+    .handle-feature:hover { background: var(--color-border); }
+    .handle-feature-icon {
+      width: 32px; height: 32px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center; font-size: 1rem;
+    }
+    .handle-feature-icon.profile { background: #DBEAFE; }
+    .handle-feature-icon.pay { background: #D1FAE5; }
+    .handle-feature-icon.auth { background: #FEF3C7; }
+    
+    /* How Section */
+    .how { background: white; }
+    .how h2 { text-align: center; margin-bottom: var(--space-2xl); }
+    .how-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-xl); }
+    @media (max-width: 768px) { .how-grid { grid-template-columns: 1fr; } }
+    .how-step { text-align: center; padding: var(--space-xl); }
+    .how-step-number {
+      width: 48px; height: 48px; background: var(--color-primary); color: white;
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 1.25rem; margin: 0 auto var(--space-lg);
+    }
+    .how-step h3 { margin-bottom: var(--space-sm); }
+    .how-step p { color: var(--color-text-muted); }
+    
+    /* Features */
+    .features { background: var(--color-bg-warm); }
+    .features h2 { text-align: center; margin-bottom: var(--space-2xl); }
+    .features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-lg); }
+    @media (max-width: 900px) { .features-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 600px) { .features-grid { grid-template-columns: 1fr; } }
+    .feature-card {
+      background: white; padding: var(--space-xl); border-radius: 12px;
+      border: 1px solid var(--color-border);
+    }
+    .feature-icon { font-size: 2rem; margin-bottom: var(--space-md); }
+    .feature-card h3 { margin-bottom: var(--space-sm); }
+    .feature-card p { color: var(--color-text-muted); font-size: 1rem; }
+    
+    /* Tech */
+    .tech { background: white; }
+    .tech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2xl); align-items: center; }
+    @media (max-width: 768px) { .tech-grid { grid-template-columns: 1fr; } }
+    .tech-badges { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-top: var(--space-lg); }
+    .tech-badge {
+      background: var(--color-bg); padding: var(--space-sm) var(--space-md);
+      border-radius: 6px; font-size: 0.875rem; font-family: var(--font-mono);
+    }
+    .tech-badge.patent { background: #FEF3C7; color: #92400E; }
+    .code-block {
+      background: var(--color-bg-dark); color: #E2E8F0;
+      padding: var(--space-xl); border-radius: 12px;
+      font-family: var(--font-mono); font-size: 0.9rem; line-height: 1.8;
+    }
+    .code-comment { color: #64748B; }
+    .code-key { color: #7DD3FC; }
+    .code-string { color: #86EFAC; }
+    .code-number { color: #FCD34D; }
+    
+    /* CTA */
+    .cta { background: var(--color-bg-dark); color: white; text-align: center; }
+    .cta h2 { color: white; margin-bottom: var(--space-md); }
+    .cta-text { color: #94A3B8; max-width: 600px; margin: 0 auto var(--space-xl); }
+    .cta-actions { display: flex; justify-content: center; gap: var(--space-md); flex-wrap: wrap; }
+    .cta .btn-primary { background: white; color: var(--color-text); }
+    .cta .btn-primary:hover { background: var(--color-primary-light); }
+    .cta .btn-secondary { border-color: #64748B; color: white; }
+    
+    /* Footer */
+    footer {
+      background: var(--color-bg-dark); color: #94A3B8;
+      padding: var(--space-2xl) 0 var(--space-xl); border-top: 1px solid #374151;
+    }
+    .footer-grid {
+      display: grid; grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: var(--space-xl); margin-bottom: var(--space-xl);
+    }
+    @media (max-width: 768px) { .footer-grid { grid-template-columns: 1fr 1fr; } }
+    .footer-brand p { margin-top: var(--space-md); font-size: 0.95rem; }
+    .footer-logo {
+      display: flex; align-items: center; gap: var(--space-sm);
+      color: white; font-weight: 600; font-size: 1.125rem;
+    }
+    .footer-column h4 {
+      color: white; font-size: 0.875rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--space-md);
+    }
+    .footer-column ul { list-style: none; }
+    .footer-column li { margin-bottom: var(--space-sm); }
+    .footer-column a { color: #94A3B8; font-size: 0.95rem; }
+    .footer-column a:hover { color: white; }
+    .footer-bottom {
+      display: flex; justify-content: space-between; align-items: center;
+      padding-top: var(--space-xl); border-top: 1px solid #374151; font-size: 0.875rem;
+    }
+    .footer-social { display: flex; gap: var(--space-md); }
+    .footer-social a { color: #94A3B8; }
+    .footer-social a:hover { color: white; }
+    
+    /* ========== gSITE VIEWER (Theme-Aware) ========== */
+    #gsite-viewer { 
+      display: none; 
+      padding-top: 100px; 
+      min-height: 100vh; 
+      background: var(--theme-background);
+      transition: background 0.3s ease;
+    }
+    #gsite-viewer .container { max-width: 600px; }
+    
+    .gsite-loading { text-align: center; padding: 4rem; color: var(--theme-on-background); }
+    .gsite-loading .spinner { font-size: 3rem; animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    
+    .gsite-error { text-align: center; padding: 4rem; color: var(--theme-on-background); }
+    .gsite-error .emoji { font-size: 4rem; margin-bottom: 1rem; }
+    .gsite-error h2 { margin-bottom: 0.5rem; }
+    .gsite-error p { color: var(--theme-disabled); margin-bottom: 1.5rem; }
+    
+    /* Theme Controls */
+    .theme-controls {
+      display: flex; justify-content: center; gap: 0.75rem;
+      margin-bottom: 1.5rem; flex-wrap: wrap;
+    }
+    .theme-btn {
+      padding: 0.5rem 1rem; border-radius: var(--theme-radius-md);
+      border: 2px solid var(--theme-divider); background: var(--theme-surface);
+      color: var(--theme-on-surface); font-size: 0.85rem; font-weight: 500;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .theme-btn:hover { border-color: var(--theme-primary); }
+    .theme-btn.active { 
+      background: var(--theme-primary); 
+      color: var(--theme-on-primary); 
+      border-color: var(--theme-primary);
+    }
+    .dark-mode-toggle {
+      background: var(--theme-surface-variant);
+      border: none;
+      padding: 0.5rem 0.75rem;
+      border-radius: var(--theme-radius-full);
+      cursor: pointer;
+      font-size: 1.1rem;
+    }
+    
+    /* gSite Card - Theme Aware */
+    .gsite-card {
+      background: var(--theme-surface);
+      border-radius: var(--theme-radius-xl);
+      box-shadow: var(--theme-shadow-lg);
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+    .gsite-cover {
+      height: var(--theme-cover-height);
+      background: linear-gradient(135deg, var(--theme-primary), var(--theme-primary-variant), var(--theme-secondary));
+    }
+    .gsite-cover.minimal { height: 0; }
+    .gsite-avatar {
+      width: 100px; height: 100px; 
+      border-radius: var(--theme-avatar-radius, 50%);
+      background: var(--theme-surface);
+      margin: -50px auto 0; 
+      display: flex; align-items: center; justify-content: center;
+      font-size: 3rem; 
+      box-shadow: var(--theme-shadow-md);
+      border: 4px solid var(--theme-surface);
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+    .gsite-avatar.no-cover { margin-top: 1.5rem; }
+    .gsite-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .gsite-header { 
+      text-align: center; 
+      padding: 1rem 1.5rem;
+      font-family: var(--theme-font-primary);
+    }
+    .gsite-name { 
+      font-size: 1.75rem; 
+      font-weight: 700; 
+      color: var(--theme-on-surface);
+    }
+    .gsite-handle { 
+      color: var(--theme-disabled); 
+      margin-bottom: 0.25rem; 
+      font-family: var(--theme-font-secondary);
+    }
+    .gsite-tagline { 
+      color: var(--theme-disabled); 
+      font-style: italic; 
+      margin-bottom: 0.75rem; 
+    }
+    .gsite-type {
+      display: inline-block; 
+      background: rgba(var(--theme-primary-rgb, 0,0,0), 0.1);
+      color: var(--theme-primary);
+      padding: 0.25rem 0.75rem;
+      border-radius: var(--theme-radius-full);
+      font-size: 0.85rem; 
+      font-weight: 500;
+    }
+    .gsite-body { padding: 1.5rem; }
+    
+    /* Trust Box - Theme Aware */
+    .trust-box {
+      background: var(--theme-surface-variant);
+      border-radius: var(--theme-radius-lg);
+      padding: 1.25rem;
+      display: flex; 
+      justify-content: space-around; 
+      margin-bottom: 1.5rem;
+      transition: all 0.3s ease;
+    }
+    .trust-stat { text-align: center; }
+    .trust-stat .value { 
+      font-size: 1.5rem; 
+      font-weight: 700; 
+      color: var(--theme-primary);
+    }
+    .trust-stat .value.score-low { color: var(--theme-trust-low); }
+    .trust-stat .value.score-medium { color: var(--theme-trust-medium); }
+    .trust-stat .value.score-high { color: var(--theme-trust-high); }
+    .trust-stat .value.score-verified { color: var(--theme-trust-verified); }
+    .trust-stat .label { 
+      font-size: 0.8rem; 
+      color: var(--theme-disabled);
+      font-family: var(--theme-font-secondary);
+    }
+    .trust-divider { width: 1px; background: var(--theme-divider); }
+    
+    /* Sections - Theme Aware */
+    .gsite-section { margin-bottom: 1.5rem; }
+    .gsite-section-title {
+      font-size: 0.75rem; 
+      font-weight: 600; 
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--theme-disabled);
+      margin-bottom: 0.5rem;
+      font-family: var(--theme-font-secondary);
+    }
+    
+    .skills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .skill {
+      background: var(--theme-surface-variant);
+      color: var(--theme-on-surface);
+      padding: 0.35rem 0.75rem;
+      border-radius: var(--theme-radius-full);
+      font-size: 0.85rem;
+    }
+    
+    .status-box {
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: var(--theme-radius-lg);
+      padding: 0.75rem 1rem;
+      display: flex; 
+      align-items: center; 
+      gap: 0.75rem;
+    }
+    .status-box.busy { 
+      background: var(--theme-surface-variant); 
+      border-color: var(--theme-divider); 
+    }
+    .status-emoji { font-size: 1.5rem; }
+    .status-text { flex: 1; }
+    .status-text .main { font-weight: 500; color: var(--theme-on-surface); }
+    .status-text .sub { font-size: 0.8rem; color: var(--theme-success); }
+    .status-box.busy .status-text .sub { color: var(--theme-disabled); }
+    .status-dot { 
+      width: 10px; height: 10px; 
+      border-radius: 50%; 
+      background: var(--theme-success); 
+    }
+    .status-box.busy .status-dot { background: var(--theme-disabled); }
+    
+    /* Actions - Theme Aware */
+    .actions { 
+      display: flex; 
+      justify-content: center; 
+      gap: 1.5rem; 
+      margin-bottom: 1.5rem; 
+    }
+    .action-btn {
+      display: flex; 
+      flex-direction: column; 
+      align-items: center; 
+      gap: 0.25rem;
+      cursor: pointer; 
+      border: none; 
+      background: none;
+    }
+    .action-icon {
+      width: 50px; height: 50px; 
+      border-radius: var(--theme-radius-full);
+      display: flex; 
+      align-items: center; 
+      justify-content: center;
+      font-size: 1.25rem; 
+      transition: transform 0.2s;
+    }
+    .action-btn:hover .action-icon { transform: scale(1.1); }
+    .action-icon.message { background: rgba(59, 130, 246, 0.15); }
+    .action-icon.payment { background: rgba(16, 185, 129, 0.15); }
+    .action-icon.share { background: rgba(249, 115, 22, 0.15); }
+    .action-label { font-size: 0.8rem; font-weight: 500; }
+    .action-label.message { color: #3B82F6; }
+    .action-label.payment { color: var(--theme-success); }
+    .action-label.share { color: #F97316; }
+    
+    /* Links - Theme Aware */
+    .links { display: flex; flex-direction: column; gap: 0.5rem; }
+    .link-item {
+      display: flex; 
+      align-items: center; 
+      gap: 0.75rem; 
+      padding: 0.75rem;
+      background: var(--theme-surface-variant);
+      border-radius: var(--theme-radius-md);
+      color: var(--theme-on-surface);
+      transition: background 0.2s;
+    }
+    .link-item:hover { 
+      background: var(--theme-divider); 
+      color: var(--theme-on-surface);
+    }
+    
+    /* Team */
+    .team-member {
+      display: block; 
+      padding: 0.75rem; 
+      background: var(--theme-surface-variant);
+      border-radius: var(--theme-radius-md);
+      margin-bottom: 0.5rem;
+      transition: background 0.2s;
+    }
+    .team-member:hover { background: var(--theme-divider); }
+    .team-handle { color: var(--theme-primary); font-weight: 500; }
+    .team-role { font-size: 0.85rem; color: var(--theme-disabled); }
+    
+    /* Signature - Theme Aware */
+    .signature-section { 
+      border-top: 1px solid var(--theme-divider); 
+      padding-top: 1rem; 
+    }
+    .signature-toggle {
+      display: flex; 
+      align-items: center; 
+      gap: 0.5rem;
+      color: var(--theme-disabled);
+      cursor: pointer; 
+      font-size: 0.9rem;
+      background: none; 
+      border: none; 
+      width: 100%; 
+      padding: 0.5rem 0;
+    }
+    .signature-toggle:hover { color: var(--theme-on-surface); }
+    .signature-content {
+      display: none; 
+      margin-top: 1rem; 
+      padding: 1rem;
+      background: var(--theme-surface-variant);
+      border-radius: var(--theme-radius-md);
+    }
+    .signature-content.open { display: block; }
+    .signature-verified {
+      display: flex; 
+      align-items: center; 
+      gap: 0.5rem;
+      color: var(--theme-success);
+      font-size: 0.85rem; 
+      font-weight: 500; 
+      margin-bottom: 0.5rem;
+    }
+    .signature-hash {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--theme-disabled);
+      word-break: break-all;
+    }
+    
+    .back-link { text-align: center; margin-top: 1.5rem; }
+    .back-link a { color: var(--theme-primary); font-size: 0.9rem; }
+    
+    /* View modes */
+    body.viewing-gsite #marketing-content { display: none; }
+    body.viewing-gsite #gsite-viewer { display: block; }
+    body.viewing-gsite footer { display: none; }
+    body.viewing-gsite nav { 
+      background: rgba(var(--theme-surface-rgb, 255,255,255), 0.95);
+      border-color: var(--theme-divider);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav>
+    <div class="nav-inner">
+      <a href="/" class="logo" onclick="goHome(event)">
+        <img src="/logo.png" alt="GNS" style="width: 32px; height: 32px; border-radius: 6px;">
+        GNS
+      </a>
+      <ul class="nav-links">
+        <li><a href="/#how">How</a></li>
+        <li><a href="/#features">Features</a></li>
+        <li><a href="/#tech">Tech</a></li>
+        <li><a href="/register-org" style="color: var(--color-primary);">For Teams</a></li>
+        <li><a href="https://github.com/gns-protocol" target="_blank" class="nav-cta">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- ========== MARKETING CONTENT ========== -->
+  <div id="marketing-content">
+  
+    <!-- Hero -->
+    <section class="hero" id="hero">
+      <div class="container">
+        <div class="hero-content">
+          <div class="hero-badge">Protocol Live • Pre-Seed Raising</div>
+          <h1>One <span>@handle</span> you own forever</h1>
+          <p class="hero-text">
+            Messages, payments, and authentication—unified under a single identity. 
+            No passwords. No platform lock-in. Powered by cryptographic proof-of-trajectory.
+          </p>
+          <div class="hero-actions">
+            <a href="/@camiloayerbe" class="btn btn-primary" onclick="navigateTo('/@camiloayerbe', event)">
+              View Live Demo →
+            </a>
+            <a href="#how" class="btn btn-secondary">Learn How</a>
+          </div>
+        </div>
+        <div class="handle-demo">
+          <div class="handle-card">
+            <div class="handle-header">
+              <div class="handle-avatar">🐆</div>
+              <div class="handle-info">
+                <h4>@yourhandle</h4>
+                <p>Trust Score: 72%</p>
+              </div>
+            </div>
+            <div class="handle-features">
+              <a href="/@camiloayerbe" class="handle-feature" onclick="navigateTo('/@camiloayerbe', event)">
+                <div class="handle-feature-icon profile">👤</div>
+                <span>View my profile</span>
+              </a>
+              <div class="handle-feature">
+                <div class="handle-feature-icon pay">💳</div>
+                <span>Receive payments</span>
+              </div>
+              <div class="handle-feature">
+                <div class="handle-feature-icon auth">🔐</div>
+                <span>Sign in anywhere</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <!-- How It Works -->
+    <section class="how" id="how">
+      <div class="container">
+        <h2>How It Works</h2>
+        <div class="how-grid">
+          <div class="how-step">
+            <div class="how-step-number">1</div>
+            <h3>Download PANTHERA</h3>
+            <p>Our app generates your cryptographic identity. Your private key stays on your device—we never see it.</p>
+          </div>
+          <div class="how-step">
+            <div class="how-step-number">2</div>
+            <h3>Collect Breadcrumbs</h3>
+            <p>Live your life. The app quietly records privacy-preserving location proofs that build your trust score.</p>
+          </div>
+          <div class="how-step">
+            <div class="how-step-number">3</div>
+            <h3>Claim Your Handle</h3>
+            <p>After 100 breadcrumbs, claim your permanent @handle. It's yours forever—no annual fees, no corporate gatekeepers.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Features -->
+    <section class="features" id="features">
+      <div class="container">
+        <h2>Why GNS?</h2>
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-icon">🔐</div>
+            <h3>True Ownership</h3>
+            <p>Your identity is a cryptographic key pair. No company can revoke it, no platform can lock you out.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">🌍</div>
+            <h3>Proof of Humanity</h3>
+            <p>Breadcrumbs prove you're a real human moving through the physical world—not a bot farm.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">💬</div>
+            <h3>Unified Messaging</h3>
+            <p>End-to-end encrypted messages. No phone number required. Works across all platforms.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">💰</div>
+            <h3>Instant Payments</h3>
+            <p>Send money to any @handle. Near-zero fees. Settles in seconds on the Stellar network.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">🎭</div>
+            <h3>Contextual Facets</h3>
+            <p>One identity, many faces. Share work@you with colleagues, friends@you with buddies.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">📧</div>
+            <h3>Spam-Free Email</h3>
+            <p>handle@gcrumbs.com routes to your encrypted inbox. Only verified humans can reach you.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Technology -->
+    <section class="tech" id="tech">
+      <div class="container">
+        <div class="tech-grid">
+          <div>
+            <h2>Built on Proven Cryptography</h2>
+            <p>GNS uses Ed25519 elliptic curve cryptography—the same battle-tested algorithm that secures SSH, Signal, and the Stellar blockchain.</p>
+            <div class="tech-badges">
+              <span class="tech-badge">Ed25519</span>
+              <span class="tech-badge">X25519</span>
+              <span class="tech-badge">H3 Geospatial</span>
+              <span class="tech-badge">Stellar</span>
+              <span class="tech-badge patent">Patent Pending</span>
+            </div>
+          </div>
+          <div class="code-block">
+            <span class="code-comment">// Your identity is a public key</span><br>
+            {<br>
+            &nbsp;&nbsp;<span class="code-key">"@id"</span>: <span class="code-string">"@camiloayerbe"</span>,<br>
+            &nbsp;&nbsp;<span class="code-key">"publicKey"</span>: <span class="code-string">"ed25519:0042d1..."</span>,<br>
+            &nbsp;&nbsp;<span class="code-key">"trust"</span>: {<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;<span class="code-key">"score"</span>: <span class="code-number">61.2</span>,<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;<span class="code-key">"breadcrumbs"</span>: <span class="code-number">481</span><br>
+            &nbsp;&nbsp;},<br>
+            &nbsp;&nbsp;<span class="code-key">"signature"</span>: <span class="code-string">"ed25519:a3f..."</span><br>
+            }
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <!-- CTA -->
+    <section class="cta">
+      <div class="container">
+        <h2>The Identity Layer the Internet Never Had</h2>
+        <p class="cta-text">GNS is open source and raising pre-seed funding. Join us in building the future of decentralized identity.</p>
+        <div class="cta-actions">
+          <a href="/@camiloayerbe" class="btn btn-primary" onclick="navigateTo('/@camiloayerbe', event)">
+            View Live Profile
+          </a>
+          <a href="https://github.com/gns-protocol" target="_blank" class="btn btn-secondary">
+            Star on GitHub
+          </a>
+        </div>
+      </div>
+    </section>
+    
+  </div>
+
+  <!-- ========== gSITE VIEWER ========== -->
+  <div id="gsite-viewer">
+    <div class="container">
+      
+      <!-- Theme Controls -->
+      <div class="theme-controls" id="theme-controls">
+        <button class="theme-btn active" data-theme="profile-minimal">Minimal</button>
+        <button class="theme-btn" data-theme="profile-creative">Creative</button>
+        <button class="theme-btn" data-theme="profile-professional">Professional</button>
+        <button class="dark-mode-toggle" onclick="toggleDarkMode()" title="Toggle dark mode">🌙</button>
+      </div>
+      
+      <!-- Loading State -->
+      <div id="gsite-loading" class="gsite-loading">
+        <div class="spinner">🐆</div>
+        <p style="margin-top: 1rem;">Loading gSite...</p>
+      </div>
+      
+      <!-- Error State -->
+      <div id="gsite-error" class="gsite-error" style="display: none;">
+        <div class="emoji">🔍</div>
+        <h2>gSite Not Found</h2>
+        <p id="error-message">This identity doesn't exist yet.</p>
+        <a href="/" class="btn btn-primary" onclick="goHome(event)">Go Home</a>
+      </div>
+      
+      <!-- Content -->
+      <div id="gsite-content" style="display: none;">
+        <div class="gsite-card">
+          <div class="gsite-cover" id="gsite-cover"></div>
+          <div class="gsite-avatar" id="gsite-avatar">🐆</div>
+          
+          <div class="gsite-header">
+            <div class="gsite-name" id="gsite-name">Loading...</div>
+            <div class="gsite-handle" id="gsite-handle">@handle</div>
+            <div class="gsite-tagline" id="gsite-tagline" style="display: none;"></div>
+            <div class="gsite-type" id="gsite-type">Person</div>
+          </div>
+          
+          <div class="gsite-body">
+            <div class="trust-box" id="trust-box" style="display: none;">
+              <div class="trust-stat">
+                <div class="value" id="trust-score">0%</div>
+                <div class="label">Trust Score</div>
+              </div>
+              <div class="trust-divider"></div>
+              <div class="trust-stat">
+                <div class="value" id="breadcrumbs">0</div>
+                <div class="label">Breadcrumbs</div>
+              </div>
+            </div>
+            
+            <div class="gsite-section" id="bio-section" style="display: none;">
+              <div class="gsite-section-title">About</div>
+              <p id="gsite-bio"></p>
+            </div>
+            
+            <div class="gsite-section" id="skills-section" style="display: none;">
+              <div class="gsite-section-title">Skills</div>
+              <div class="skills" id="gsite-skills"></div>
+            </div>
+            
+            <div class="gsite-section" id="status-section" style="display: none;">
+              <div class="status-box" id="status-box">
+                <span class="status-emoji" id="status-emoji">🐆</span>
+                <div class="status-text">
+                  <div class="main" id="status-text">Status</div>
+                  <div class="sub" id="status-available">Available</div>
+                </div>
+                <div class="status-dot"></div>
+              </div>
+            </div>
+            
+            <div class="gsite-section" id="team-section" style="display: none;">
+              <div class="gsite-section-title">Team</div>
+              <div id="gsite-team"></div>
+            </div>
+            
+            <div class="actions">
+              <button class="action-btn" onclick="handleMessage()">
+                <div class="action-icon message">💬</div>
+                <span class="action-label message">Message</span>
+              </button>
+              <button class="action-btn" onclick="handlePayment()">
+                <div class="action-icon payment">💳</div>
+                <span class="action-label payment">Pay</span>
+              </button>
+              <button class="action-btn" onclick="handleShare()">
+                <div class="action-icon share">↗️</div>
+                <span class="action-label share">Share</span>
+              </button>
+            </div>
+            
+            <div class="gsite-section" id="links-section" style="display: none;">
+              <div class="gsite-section-title">Links</div>
+              <div class="links" id="gsite-links"></div>
+            </div>
+            
+            <div class="signature-section">
+              <button class="signature-toggle" onclick="toggleSignature()">
+                🔐 Cryptographic Signature
+                <span style="margin-left: auto;">▼</span>
+              </button>
+              <div class="signature-content" id="signature-content">
+                <div class="signature-verified">✓ Verified Ed25519 Signature</div>
+                <div class="signature-hash" id="signature-hash"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="back-link">
+          <a href="/" onclick="goHome(event)">← Back to GNS</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="footer-logo">
+            <span style="font-size: 1.25rem;">🌐</span>
+            GNS / Globe Crumbs
+          </div>
+          <p>The identity layer the internet never had. Open source protocol for decentralized identity through proof-of-trajectory.</p>
+        </div>
+        <div class="footer-column">
+          <h4>Protocol</h4>
+          <ul>
+            <li><a href="#how">How It Works</a></li>
+            <li><a href="#features">Features</a></li>
+            <li><a href="#tech">Technology</a></li>
+          </ul>
+        </div>
+        <div class="footer-column">
+          <h4>Developers</h4>
+          <ul>
+            <li><a href="https://github.com/gns-protocol" target="_blank">GitHub</a></li>
+            <li><a href="#">Documentation</a></li>
+            <li><a href="#">API Reference</a></li>
+          </ul>
+        </div>
+        <div class="footer-column">
+          <h4>Company</h4>
+          <ul>
+            <li><a href="mailto:hello@gcrumbs.com">Contact</a></li>
+            <li><a href="#">Blog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>© 2025 GNS Protocol. Open source under BSL 1.1 → Apache 2.0</p>
+        <div class="footer-social">
+          <a href="https://github.com/gns-protocol" target="_blank">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          </a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const API_BASE = 'https://gns-browser-production.up.railway.app';
+    
+    // Current state
+    let currentTheme = 'profile-minimal';
+    let currentGSiteData = null;
+    let isDarkMode = false;
+    
+    // ========== THEME SYSTEM ==========
+    
+    // Default themes (fallback if API fails)
+    const DEFAULT_THEMES = {
+      'profile-minimal': {
+        colors: {
+          primary: '#000000', primaryVariant: '#333333',
+          secondary: '#666666', surface: '#FFFFFF',
+          surfaceVariant: '#F8F8F8', background: '#FFFFFF',
+          onPrimary: '#FFFFFF', onSurface: '#000000',
+          onBackground: '#000000', divider: '#EEEEEE',
+          disabled: '#BDBDBD', success: '#388E3C',
+          trustLow: '#9E9E9E', trustMedium: '#FFC107',
+          trustHigh: '#4CAF50', trustVerified: '#2196F3'
+        },
+        typography: { fontFamily: { primary: 'Inter', secondary: 'Inter' } },
+        borders: { radius: { sm: 4, md: 8, lg: 12, xl: 16, full: 9999 } },
+        shadows: { sm: '0 1px 2px rgba(0,0,0,0.03)', md: '0 2px 4px rgba(0,0,0,0.05)', lg: '0 4px 8px rgba(0,0,0,0.05)' },
+        components: { header: { style: 'minimal', coverHeight: 0 }, avatar: { shape: 'circle' } },
+        darkMode: { colors: { background: '#000000', surface: '#111111', surfaceVariant: '#1A1A1A', onBackground: '#FFFFFF', onSurface: '#FFFFFF', divider: '#333333' } }
+      },
+      'profile-creative': {
+        colors: {
+          primary: '#E94560', primaryVariant: '#C73E54',
+          secondary: '#1A1A2E', surface: '#FFFFFF',
+          surfaceVariant: '#FFF5F7', background: '#FAFAFA',
+          onPrimary: '#FFFFFF', onSurface: '#1A1A2E',
+          onBackground: '#1A1A2E', divider: '#FFE4E9',
+          disabled: '#BDBDBD', success: '#00BFA5',
+          trustLow: '#9E9E9E', trustMedium: '#FFB300',
+          trustHigh: '#00BFA5', trustVerified: '#00B0FF'
+        },
+        typography: { fontFamily: { primary: 'Poppins', secondary: 'Inter' } },
+        borders: { radius: { sm: 8, md: 16, lg: 24, xl: 32, full: 9999 } },
+        shadows: { sm: '0 2px 8px rgba(233,69,96,0.1)', md: '0 4px 16px rgba(233,69,96,0.15)', lg: '0 8px 32px rgba(233,69,96,0.2)' },
+        components: { header: { style: 'cover', coverHeight: 200 }, avatar: { shape: 'rounded', border: true } },
+        darkMode: { colors: { background: '#0F0F1A', surface: '#1A1A2E', surfaceVariant: '#252540', onBackground: '#FFFFFF', onSurface: '#FFFFFF', divider: '#3D3D5C' } }
+      },
+      'profile-professional': {
+        colors: {
+          primary: '#1E3A5F', primaryVariant: '#152C4A',
+          secondary: '#2E86AB', surface: '#FFFFFF',
+          surfaceVariant: '#F5F7FA', background: '#FAFBFC',
+          onPrimary: '#FFFFFF', onSurface: '#1E3A5F',
+          onBackground: '#1E3A5F', divider: '#E1E5EB',
+          disabled: '#9E9E9E', success: '#2E7D32',
+          trustLow: '#78909C', trustMedium: '#FFB74D',
+          trustHigh: '#66BB6A', trustVerified: '#42A5F5'
+        },
+        typography: { fontFamily: { primary: 'Inter', secondary: 'Source Serif Pro' } },
+        borders: { radius: { sm: 4, md: 8, lg: 12, xl: 16, full: 9999 } },
+        shadows: { sm: '0 1px 3px rgba(30,58,95,0.08)', md: '0 4px 6px rgba(30,58,95,0.1)', lg: '0 10px 15px rgba(30,58,95,0.1)' },
+        components: { header: { style: 'cover', coverHeight: 160 }, avatar: { shape: 'circle', border: true } },
+        darkMode: { colors: { background: '#0D1B2A', surface: '#1B2838', surfaceVariant: '#243447', onBackground: '#E8EEF4', onSurface: '#E8EEF4', divider: '#3D5A73' } }
+      }
+    };
+    
+    // Apply theme to CSS variables
+    function applyTheme(themeId) {
+      const theme = DEFAULT_THEMES[themeId] || DEFAULT_THEMES['profile-minimal'];
+      const colors = isDarkMode && theme.darkMode ? { ...theme.colors, ...theme.darkMode.colors } : theme.colors;
+      const root = document.documentElement;
+      
+      // Colors
+      Object.entries(colors).forEach(([key, value]) => {
+        const cssKey = key.replace(/([A-Z])/g, '-$1').toLowerCase();
+        root.style.setProperty(`--theme-${cssKey}`, value);
+      });
+      
+      // Typography
+      if (theme.typography?.fontFamily) {
+        root.style.setProperty('--theme-font-primary', `'${theme.typography.fontFamily.primary}', sans-serif`);
+        root.style.setProperty('--theme-font-secondary', `'${theme.typography.fontFamily.secondary}', sans-serif`);
+      }
+      
+      // Borders
+      if (theme.borders?.radius) {
+        Object.entries(theme.borders.radius).forEach(([key, value]) => {
+          root.style.setProperty(`--theme-radius-${key}`, value === 9999 ? '9999px' : `${value}px`);
+        });
+      }
+      
+      // Shadows
+      if (theme.shadows) {
+        Object.entries(theme.shadows).forEach(([key, value]) => {
+          root.style.setProperty(`--theme-shadow-${key}`, value);
+        });
+      }
+      
+      // Components
+      const coverEl = document.getElementById('gsite-cover');
+      const avatarEl = document.getElementById('gsite-avatar');
+      
+      if (theme.components?.header) {
+        const coverHeight = theme.components.header.coverHeight || 0;
+        root.style.setProperty('--theme-cover-height', `${coverHeight}px`);
+        
+        if (coverEl) {
+          coverEl.style.display = coverHeight > 0 ? 'block' : 'none';
+        }
+        if (avatarEl) {
+          avatarEl.classList.toggle('no-cover', coverHeight === 0);
+        }
+      }
+      
+      if (theme.components?.avatar) {
+        const shape = theme.components.avatar.shape;
+        let radius = '50%';
+        if (shape === 'rounded') radius = 'var(--theme-radius-xl)';
+        if (shape === 'square') radius = 'var(--theme-radius-md)';
+        root.style.setProperty('--theme-avatar-radius', radius);
+      }
+      
+      // Update theme buttons
+      document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.theme === themeId);
+      });
+      
+      currentTheme = themeId;
+    }
+    
+    // Toggle dark mode
+    function toggleDarkMode() {
+      isDarkMode = !isDarkMode;
+      document.body.classList.toggle('dark-mode', isDarkMode);
+      document.querySelector('.dark-mode-toggle').textContent = isDarkMode ? '☀️' : '🌙';
+      applyTheme(currentTheme);
+    }
+    
+    // Theme button click handler
+    document.querySelectorAll('.theme-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        applyTheme(btn.dataset.theme);
+      });
+    });
+    
+    // ========== NAVIGATION ==========
+    
+    function goHome(e) {
+      if (e) e.preventDefault();
+      window.history.pushState(null, '', '/');
+      handleRoute();
+    }
+    
+    function navigateTo(path, e) {
+      if (e) e.preventDefault();
+      window.history.pushState(null, '', path);
+      handleRoute();
+    }
+    
+    // Show/hide views
+    function showMarketing() {
+      document.body.classList.remove('viewing-gsite');
+      document.body.classList.remove('dark-mode');
+      isDarkMode = false;
+      document.title = 'GNS - The Identity Layer the Internet Never Had';
+    }
+    
+    function showGSiteViewer() {
+      document.body.classList.add('viewing-gsite');
+      document.getElementById('gsite-loading').style.display = 'block';
+      document.getElementById('gsite-error').style.display = 'none';
+      document.getElementById('gsite-content').style.display = 'none';
+      applyTheme(currentTheme);
+    }
+    
+    function showGSiteError(message) {
+      document.getElementById('gsite-loading').style.display = 'none';
+      document.getElementById('gsite-error').style.display = 'block';
+      document.getElementById('gsite-content').style.display = 'none';
+      document.getElementById('error-message').textContent = message;
+    }
+    
+    function showGSiteContent() {
+      document.getElementById('gsite-loading').style.display = 'none';
+      document.getElementById('gsite-error').style.display = 'none';
+      document.getElementById('gsite-content').style.display = 'block';
+    }
+    
+    // ========== gSITE FETCHING ==========
+    
+    async function fetchGSite(id, facetId = null) {
+      showGSiteViewer();
+      
+      try {
+        let url = `${API_BASE}/gsite/${encodeURIComponent(id)}`;
+        if (facetId) {
+          url += `?facet=${encodeURIComponent(facetId)}`;
+        }
+        
+        const response = await fetch(url);
+        const result = await response.json();
+        
+        if (result.success && result.data) {
+          currentGSiteData = result.data;
+          renderGSite(result.data, facetId);
+          
+          // Show theme controls only for Person type
+          const themeControls = document.getElementById('theme-controls');
+          themeControls.style.display = result.data['@type'] === 'Person' ? 'flex' : 'none';
+        } else {
+          showGSiteError(result.error || 'gSite not found');
+        }
+      } catch (err) {
+        console.error('Fetch error:', err);
+        showGSiteError('Failed to load gSite. Please try again.');
+      }
+    }
+    
+    function getTrustScoreClass(score) {
+      if (score <= 25) return 'score-low';
+      if (score <= 50) return 'score-medium';
+      if (score <= 75) return 'score-high';
+      return 'score-verified';
+    }
+    
+    function renderGSite(data, facetId = null) {
+      const isPerson = data['@type'] === 'Person';
+      const isOrg = data['@type'] === 'Organization';
+      
+      // Store current data
+      window.currentHandle = data['@id'];
+      window.currentPublicKey = data.publicKey;
+      
+      // Avatar
+      const avatarEl = document.getElementById('gsite-avatar');
+      if (data.avatar?.url) {
+        avatarEl.innerHTML = `<img src="${data.avatar.url}" alt="${data.name}">`;
+      } else {
+        avatarEl.textContent = data.status?.emoji || (isPerson ? '🐆' : '🏢');
+      }
+      
+      // Basic info
+      document.getElementById('gsite-name').textContent = data.name;
+      
+      let handleDisplay = data['@id'];
+      if (facetId) {
+        handleDisplay = `${facetId}@${data['@id'].replace('@', '')}`;
+      }
+      document.getElementById('gsite-handle').textContent = handleDisplay;
+      
+      const typeDisplay = facetId ? `${data['@type']} · ${facetId}` : data['@type'];
+      document.getElementById('gsite-type').textContent = typeDisplay;
+      
+      // Tagline
+      const taglineEl = document.getElementById('gsite-tagline');
+      if (data.tagline) {
+        taglineEl.textContent = data.tagline;
+        taglineEl.style.display = 'block';
+      } else {
+        taglineEl.style.display = 'none';
+      }
+      
+      // Trust
+      if (data.trust) {
+        const scoreEl = document.getElementById('trust-score');
+        const score = data.trust.score;
+        scoreEl.textContent = score.toFixed(1) + '%';
+        scoreEl.className = 'value ' + getTrustScoreClass(score);
+        
+        document.getElementById('breadcrumbs').textContent = data.trust.breadcrumbs.toLocaleString();
+        document.getElementById('trust-box').style.display = 'flex';
+      } else {
+        document.getElementById('trust-box').style.display = 'none';
+      }
+      
+      // Bio
+      if (data.bio) {
+        document.getElementById('gsite-bio').textContent = data.bio;
+        document.getElementById('bio-section').style.display = 'block';
+      } else {
+        document.getElementById('bio-section').style.display = 'none';
+      }
+      
+      // Skills
+      if (isPerson && data.skills?.length) {
+        document.getElementById('gsite-skills').innerHTML = data.skills.map(s => `<span class="skill">${s}</span>`).join('');
+        document.getElementById('skills-section').style.display = 'block';
+      } else {
+        document.getElementById('skills-section').style.display = 'none';
+      }
+      
+      // Status
+      if (isPerson && data.status) {
+        const statusBox = document.getElementById('status-box');
+        statusBox.className = 'status-box' + (data.status.available ? '' : ' busy');
+        document.getElementById('status-emoji').textContent = data.status.emoji || '🐆';
+        document.getElementById('status-text').textContent = data.status.text || 'No status';
+        document.getElementById('status-available').textContent = data.status.available ? 'Available' : 'Busy';
+        document.getElementById('status-section').style.display = 'block';
+      } else {
+        document.getElementById('status-section').style.display = 'none';
+      }
+      
+      // Team (orgs)
+      if (isOrg && data.team?.length) {
+        document.getElementById('gsite-team').innerHTML = data.team.map(m => `
+          <a href="/${m.handle}" class="team-member" onclick="navigateTo('/${m.handle}', event)">
+            <div class="team-handle">${m.handle}</div>
+            <div class="team-role">${m.role}</div>
+          </a>
+        `).join('');
+        document.getElementById('team-section').style.display = 'block';
+      } else {
+        document.getElementById('team-section').style.display = 'none';
+      }
+      
+      // Links
+      if (data.links?.length) {
+        const icons = { website: '🌐', twitter: '🐦', github: '💻', linkedin: '💼', instagram: '📷', email: '📧' };
+        document.getElementById('gsite-links').innerHTML = data.links.map(link => {
+          const icon = icons[link.type?.toLowerCase()] || '🔗';
+          const url = link.url || '#';
+          return `<a href="${url}" target="_blank" class="link-item"><span>${icon}</span><span>${url}</span></a>`;
+        }).join('');
+        document.getElementById('links-section').style.display = 'block';
+      } else {
+        document.getElementById('links-section').style.display = 'none';
+      }
+      
+      // Signature
+      document.getElementById('signature-hash').textContent = data.signature || 'No signature';
+      
+      // Update title
+      document.title = `${data.name} (${data['@id']}) | GNS`;
+      
+      showGSiteContent();
+    }
+    
+    function toggleSignature() {
+      document.getElementById('signature-content').classList.toggle('open');
+    }
+    
+    function handleMessage() {
+      const handle = window.currentHandle || 'this user';
+      alert(`Messaging coming soon!\n\nTo message ${handle}, download the PANTHERA app.`);
+    }
+    
+    function handlePayment() {
+      const handle = window.currentHandle || '@unknown';
+      const publicKey = window.currentPublicKey;
+      
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+      modal.innerHTML = `
+        <div style="background:var(--theme-surface);border-radius:var(--theme-radius-xl);max-width:400px;width:90%;padding:24px;text-align:center;color:var(--theme-on-surface);">
+          <div style="font-size:48px;margin-bottom:16px;">💳</div>
+          <h2 style="margin-bottom:8px;">Pay ${handle}</h2>
+          <p style="color:var(--theme-disabled);margin-bottom:20px;">Send XLM or GNS tokens directly to this identity</p>
+          
+          <div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:var(--theme-radius-lg);padding:16px;margin-bottom:20px;text-align:left;">
+            <div style="font-size:12px;color:var(--theme-disabled);margin-bottom:4px;">STELLAR ADDRESS</div>
+            <div style="font-family:var(--font-mono);font-size:12px;word-break:break-all;color:var(--theme-success);">
+              ${publicKey ? publicKey.substring(0, 8) + '...' + publicKey.substring(publicKey.length - 8) : 'Not available'}
+            </div>
+          </div>
+          
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <a href="https://lobstr.co/pay/${publicKey || ''}" target="_blank" 
+               style="background:var(--theme-success);color:white;padding:14px;border-radius:var(--theme-radius-lg);text-decoration:none;font-weight:600;">
+              Pay with LOBSTR Wallet
+            </a>
+            <a href="stellar:${publicKey || ''}?amount=10&asset=native" 
+               style="background:var(--theme-primary);color:var(--theme-on-primary);padding:14px;border-radius:var(--theme-radius-lg);text-decoration:none;font-weight:600;">
+              Open Stellar Wallet
+            </a>
+            <button onclick="navigator.clipboard.writeText('${publicKey||''}');this.textContent='✓ Copied!'" 
+                    style="background:var(--theme-surface-variant);color:var(--theme-on-surface);padding:14px;border-radius:var(--theme-radius-lg);border:none;font-weight:600;cursor:pointer;">
+              Copy Stellar Address
+            </button>
+          </div>
+          
+          <button onclick="this.closest('div').parentElement.remove()" 
+                  style="margin-top:20px;background:none;border:none;color:var(--theme-disabled);cursor:pointer;font-size:14px;">
+            Cancel
+          </button>
+        </div>
+      `;
+      modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+      document.body.appendChild(modal);
+    }
+    
+    function handleShare() {
+      if (navigator.share) {
+        navigator.share({ title: document.title, url: window.location.href });
+      } else {
+        navigator.clipboard.writeText(window.location.href);
+        alert('Link copied to clipboard!');
+      }
+    }
+    
+    // ========== ROUTER ==========
+    
+    function handleRoute() {
+      const path = window.location.pathname;
+      
+      if (path === '/' || path === '') {
+        showMarketing();
+      } else if (path.includes('@')) {
+        const id = decodeURIComponent(path.slice(1));
+        
+        let facetId = null;
+        let cleanId = id;
+        
+        if (id.includes('@') && !id.startsWith('@') && !id.endsWith('@')) {
+          const parts = id.split('@');
+          if (parts.length === 2 && parts[0] && parts[1]) {
+            facetId = parts[0];
+            cleanId = '@' + parts[1];
+          }
+        }
+        
+        fetchGSite(cleanId, facetId);
+      } else {
+        showMarketing();
+      }
+    }
+    
+    window.addEventListener('popstate', handleRoute);
+    handleRoute();
+  </script>
+</body>
+</html>

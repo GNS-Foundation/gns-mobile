@@ -26,6 +26,7 @@ import '../profile/profile_editor_screen.dart';
 import '../screens/identity_viewer_screen.dart';
 import '../screens/gns_token_screen.dart';
 import '../screens/handle_management_screen.dart';
+import '../screens/browser_pairing_screen.dart';
 import '../financial/send_money_screen.dart';
 import '../financial/transactions_screen.dart';
 import '../financial/financial_hub_screen.dart';
@@ -163,6 +164,11 @@ class _HomeTabState extends State<HomeTab> {
           style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 2),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.qr_code_scanner),
+            onPressed: _pairBrowser,
+            tooltip: 'Pair Browser',
+          ),
           IconButton(
             icon: const Icon(Icons.share),
             onPressed: _shareIdentity,
@@ -791,6 +797,15 @@ class _HomeTabState extends State<HomeTab> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> _pairBrowser() async {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BrowserPairingScreen(wallet: widget.wallet),
       ),
     );
   }

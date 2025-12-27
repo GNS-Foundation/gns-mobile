@@ -289,8 +289,8 @@ router.get('/inbox', verifySessionAuth, async (req: AuthenticatedRequest, res: R
     // Get all messages where user is sender OR recipient
     const messages = await db.getAllUserMessages(pk, limit, since);
 
-    // Transform with correct encryption copy
-    const transformed = messages.map((m: any) => {
+    // Transform with correct encryption copy AND fetch handles
+    const transformed = await Promise.all(messages.map(async (m: any) => {
       const isOutgoing = m.from_pk?.toLowerCase() === pk;
 
       const envelope: any = m.envelope || {
@@ -307,15 +307,21 @@ router.get('/inbox', verifySessionAuth, async (req: AuthenticatedRequest, res: R
         envelope.nonce = m.sender_nonce;
       }
 
+      // ✅ FIX: Fetch handles for sender and recipient
+      const fromAlias = await db.getAliasByPk(m.from_pk);
+      const toAlias = await db.getAliasByPk(m.to_pk);
+
       return {
         ...envelope,
         id: m.id,
         from_pk: m.from_pk,
+        from_handle: fromAlias?.handle,  // ✅ Add handle
         to_pk: m.to_pk,
+        to_handle: toAlias?.handle,      // ✅ Add handle
         created_at: m.created_at,
         isOutgoing: isOutgoing,
       };
-    });
+    }));
 
     return res.json({
       success: true,

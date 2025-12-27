@@ -302,7 +302,7 @@ class RelayChannel implements CommunicationChannel {
       final auth = await authProvider();
       
       final response = await _dio.get(
-        '',  // GET /messages
+        '/inbox',  // ✅ FIX 1: GET /messages/inbox
         queryParameters: {
           if (since != null) 'since': since,
           'limit': limit,
@@ -310,7 +310,7 @@ class RelayChannel implements CommunicationChannel {
         options: Options(headers: auth.headers),
       );
       
-      final messages = response.data['messages'] as List? ?? [];
+      final messages = response.data['data'] as List? ?? [];  // ✅ FIX 2: 'data' not 'messages'
       return messages
           .map((m) => GnsEnvelope.fromJson(m as Map<String, dynamic>))
           .toList();

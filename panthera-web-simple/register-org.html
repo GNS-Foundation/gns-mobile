@@ -1,0 +1,1971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register Organization | GNS</title>
+  <meta name="description" content="Claim your organization's namespace on GNS. Cryptographic identity for your team.">
+  
+  <!-- Fonts - Same as main site -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --primary: #0891B2;
+      --primary-dark: #0E7490;
+      --primary-light: #E0F7FA;
+      --secondary: #10B981;
+      --accent: #F59E0B;
+      --text: #1a1a1a;
+      --text-secondary: #64748b;
+      --text-muted: #94a3b8;
+      --bg: #ffffff;
+      --bg-subtle: #f8fafc;
+      --bg-muted: #f1f5f9;
+      --border: #e2e8f0;
+      --error: #EF4444;
+      --success: #10B981;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: linear-gradient(180deg, var(--bg) 0%, var(--bg-subtle) 100%);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+    
+    /* Navigation - Match main site */
+    nav {
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+      background: white;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    nav .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .logo {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .logo svg {
+      width: 24px;
+      height: 24px;
+      color: var(--primary);
+    }
+    
+    .nav-links {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+    
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+    
+    .nav-links a:hover {
+      color: var(--text);
+    }
+    
+    .nav-links .btn-github {
+      background: var(--text);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+    
+    .nav-links .btn-github:hover {
+      background: #333;
+      color: white;
+    }
+    
+    /* Hero */
+    .hero {
+      padding: 80px 0 60px;
+      text-align: center;
+    }
+    
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: white;
+      border: 1px solid var(--border);
+      padding: 8px 16px;
+      border-radius: 50px;
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+    }
+    
+    .badge .dot {
+      width: 8px;
+      height: 8px;
+      background: var(--secondary);
+      border-radius: 50%;
+    }
+    
+    .hero h1 {
+      font-size: clamp(36px, 5vw, 56px);
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+    
+    .hero h1 span {
+      color: var(--primary);
+    }
+    
+    .hero p {
+      font-size: 18px;
+      color: var(--text-secondary);
+      max-width: 500px;
+      margin: 0 auto 32px;
+    }
+    
+    /* Namespace Checker */
+    .namespace-checker {
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    
+    .namespace-input-wrapper {
+      display: flex;
+      background: white;
+      border-radius: 12px;
+      padding: 6px;
+      border: 2px solid var(--border);
+      transition: border-color 0.3s, box-shadow 0.3s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    
+    .namespace-input-wrapper:focus-within {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-light);
+    }
+    
+    .namespace-input-wrapper.available {
+      border-color: var(--success);
+    }
+    
+    .namespace-input-wrapper.taken {
+      border-color: var(--error);
+    }
+    
+    #namespace-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 14px 16px;
+      font-size: 18px;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      outline: none;
+    }
+    
+    #namespace-input::placeholder {
+      color: var(--text-muted);
+    }
+    
+    .namespace-suffix {
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--primary);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    
+    .check-btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 14px 24px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    
+    .check-btn:hover {
+      background: var(--primary-dark);
+    }
+    
+    .namespace-status {
+      margin-top: 12px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-weight: 500;
+      font-size: 14px;
+      display: none;
+    }
+    
+    .namespace-status.available {
+      display: block;
+      background: #ECFDF5;
+      color: #047857;
+      border: 1px solid #A7F3D0;
+    }
+    
+    .namespace-status.taken {
+      display: block;
+      background: #FEF2F2;
+      color: #B91C1C;
+      border: 1px solid #FECACA;
+    }
+    
+    /* Section Styling */
+    section {
+      padding: 80px 0;
+    }
+    
+    section h2 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      text-align: center;
+      color: var(--text);
+    }
+    
+    section .subtitle {
+      color: var(--text-secondary);
+      text-align: center;
+      max-width: 500px;
+      margin: 0 auto 48px;
+      font-size: 16px;
+    }
+    
+    /* What You Get */
+    .what-you-get {
+      background: var(--bg-subtle);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .namespace-example {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 700px;
+      margin: 0 auto 48px;
+      font-family: 'JetBrains Mono', monospace;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+      border: 1px solid var(--border);
+    }
+    
+    .namespace-example .company-name {
+      font-size: 28px;
+      color: var(--primary);
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .team-tree {
+      padding-left: 20px;
+      border-left: 2px solid var(--border);
+    }
+    
+    .team-member {
+      padding: 10px 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+    
+    .team-member::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      background: var(--border);
+      margin-left: -21px;
+    }
+    
+    .team-member .handle {
+      color: var(--text);
+      font-weight: 500;
+    }
+    
+    .team-member .role {
+      color: var(--text-muted);
+      font-size: 13px;
+      background: var(--bg-muted);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 20px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    .feature-card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      border: 1px solid var(--border);
+      transition: all 0.3s;
+    }
+    
+    .feature-card:hover {
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+      transform: translateY(-2px);
+    }
+    
+    .feature-card .icon {
+      font-size: 28px;
+      margin-bottom: 12px;
+    }
+    
+    .feature-card h3 {
+      font-size: 16px;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    
+    /* Security Comparison */
+    .security-section {
+      background: white;
+    }
+    
+    .comparison-table {
+      max-width: 700px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+    
+    .comparison-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .comparison-row:last-child {
+      border-bottom: none;
+    }
+    
+    .comparison-row.header {
+      background: var(--bg-subtle);
+    }
+    
+    .comparison-cell {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+    }
+    
+    .comparison-cell.traditional {
+      color: var(--text-secondary);
+    }
+    
+    .comparison-cell.gns {
+      background: #F0FDFA;
+      color: var(--text);
+      font-weight: 500;
+    }
+    
+    .comparison-cell strong {
+      font-weight: 600;
+    }
+    
+    /* Pricing */
+    .pricing-section {
+      background: var(--bg-subtle);
+      border-top: 1px solid var(--border);
+    }
+    
+    .savings-badge {
+      display: inline-block;
+      background: #ECFDF5;
+      color: #047857;
+      padding: 8px 20px;
+      border-radius: 50px;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 48px;
+      border: 1px solid #A7F3D0;
+    }
+    
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      max-width: 1050px;
+      margin: 0 auto 48px;
+    }
+    
+    .pricing-card {
+      background: white;
+      border-radius: 16px;
+      padding: 28px;
+      border: 2px solid var(--border);
+      transition: all 0.3s;
+      position: relative;
+    }
+    
+    .pricing-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 8px 24px rgba(8, 145, 178, 0.1);
+    }
+    
+    .pricing-card.popular {
+      border-color: var(--primary);
+    }
+    
+    .popular-badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--primary);
+      color: white;
+      padding: 4px 14px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .pricing-card .tier-icon {
+      font-size: 36px;
+      margin-bottom: 12px;
+    }
+    
+    .pricing-card h3 {
+      font-size: 20px;
+      margin-bottom: 4px;
+      color: var(--text);
+    }
+    
+    .pricing-card .price {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 4px;
+    }
+    
+    .pricing-card .price span {
+      font-size: 14px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+    
+    .pricing-card .users {
+      color: var(--text-secondary);
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    
+    .pricing-card ul {
+      list-style: none;
+      margin-bottom: 24px;
+    }
+    
+    .pricing-card li {
+      padding: 6px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+    
+    .pricing-card li::before {
+      content: '✓';
+      color: var(--success);
+      font-weight: bold;
+    }
+    
+    .pricing-card .select-btn {
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 2px solid var(--primary);
+      background: transparent;
+      color: var(--primary);
+    }
+    
+    .pricing-card .select-btn:hover,
+    .pricing-card.selected .select-btn {
+      background: var(--primary);
+      color: white;
+    }
+    
+    /* Cost Comparison Table */
+    .cost-comparison {
+      background: white;
+      border-radius: 16px;
+      padding: 28px;
+      max-width: 800px;
+      margin: 0 auto;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+    
+    .cost-comparison h3 {
+      margin-bottom: 20px;
+      text-align: center;
+      font-size: 18px;
+    }
+    
+    .cost-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    
+    .cost-table th,
+    .cost-table td {
+      padding: 14px 12px;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .cost-table th {
+      color: var(--text-secondary);
+      font-weight: 500;
+      font-size: 13px;
+    }
+    
+    .cost-table th:first-child,
+    .cost-table td:first-child {
+      text-align: left;
+    }
+    
+    .cost-table .gns-col {
+      background: #F0FDFA;
+      color: var(--primary);
+      font-weight: 700;
+    }
+    
+    .cost-table .savings {
+      color: var(--success);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    
+    /* How It Works */
+    .how-section {
+      background: white;
+      border-top: 1px solid var(--border);
+    }
+    
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 32px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    .step-card {
+      text-align: center;
+    }
+    
+    .step-number {
+      width: 48px;
+      height: 48px;
+      background: var(--primary);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0 auto 16px;
+    }
+    
+    .step-card h3 {
+      margin-bottom: 8px;
+      font-size: 16px;
+      color: var(--text);
+    }
+    
+    .step-card p {
+      color: var(--text-secondary);
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    
+    .step-card code {
+      display: inline-block;
+      background: var(--bg-muted);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--primary);
+    }
+    
+    /* Registration Form */
+    .registration-section {
+      background: var(--bg-subtle);
+      border-top: 1px solid var(--border);
+    }
+    
+    .registration-form {
+      max-width: 520px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 20px;
+      padding: 36px;
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+    }
+    
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+      color: var(--text);
+      font-size: 14px;
+    }
+    
+    .form-group input,
+    .form-group textarea {
+      width: 100%;
+      padding: 12px 14px;
+      background: white;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 15px;
+      font-family: inherit;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    
+    .form-group input:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-light);
+    }
+    
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+    
+    .form-group input::placeholder,
+    .form-group textarea::placeholder {
+      color: var(--text-muted);
+    }
+    
+    .form-row {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .form-row .namespace-suffix {
+      padding: 0 12px;
+      background: var(--bg-muted);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      font-weight: 700;
+      color: var(--primary);
+    }
+    
+    .tier-selector {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    
+    .tier-option {
+      padding: 16px;
+      background: white;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: left;
+      position: relative;
+    }
+    
+    .tier-option:hover {
+      border-color: var(--primary-light);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(8, 145, 178, 0.1);
+    }
+    
+    .tier-option.selected {
+      border-color: var(--primary);
+      background: linear-gradient(135deg, #F0FDFA 0%, #E0F7FA 100%);
+    }
+    
+    .tier-option.selected::after {
+      content: '✓';
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 22px;
+      height: 22px;
+      background: var(--primary);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    
+    .tier-option .tier-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+    
+    .tier-option .tier-name {
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--text);
+    }
+    
+    .tier-option .tier-price {
+      color: var(--primary);
+      font-weight: 700;
+      font-size: 16px;
+    }
+    
+    .tier-option .tier-users {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .tier-option .tier-features {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    
+    .tier-option .tier-features li {
+      font-size: 12px;
+      color: var(--text-secondary);
+      padding: 3px 0;
+      padding-left: 18px;
+      position: relative;
+    }
+    
+    .tier-option .tier-features li::before {
+      content: '✓';
+      position: absolute;
+      left: 0;
+      color: var(--secondary);
+      font-weight: bold;
+      font-size: 11px;
+    }
+    
+    .tier-option.popular-tier::before {
+      content: 'POPULAR';
+      position: absolute;
+      top: -10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 10px;
+      letter-spacing: 0.5px;
+    }
+    
+    .submit-btn {
+      width: 100%;
+      padding: 16px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .submit-btn:hover {
+      background: var(--primary-dark);
+    }
+    
+    .submit-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    
+    .modal-overlay.active {
+      display: flex;
+    }
+    
+    .modal {
+      background: white;
+      border-radius: 20px;
+      padding: 36px;
+      max-width: 540px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.2);
+    }
+    
+    .modal h2 {
+      text-align: left;
+      margin-bottom: 8px;
+      font-size: 24px;
+    }
+    
+    .modal-subtitle {
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+      font-size: 15px;
+    }
+    
+    .dns-instructions {
+      background: var(--bg-subtle);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 1px solid var(--border);
+    }
+    
+    .dns-field {
+      margin-bottom: 14px;
+    }
+    
+    .dns-field:last-child {
+      margin-bottom: 0;
+    }
+    
+    .dns-field label {
+      display: block;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+    
+    .dns-value {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: white;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      border: 1px solid var(--border);
+    }
+    
+    .dns-value code {
+      flex: 1;
+      color: var(--primary);
+      font-size: 14px;
+      font-weight: 500;
+      word-break: break-all;
+    }
+    
+    .copy-btn {
+      background: var(--bg-muted);
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 6px;
+      transition: all 0.2s;
+      font-size: 14px;
+    }
+    
+    .copy-btn:hover {
+      background: var(--primary-light);
+      color: var(--primary);
+    }
+    
+    .providers-hint {
+      background: #FFFBEB;
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 20px;
+      border: 1px solid #FDE68A;
+    }
+    
+    .providers-hint h4 {
+      color: #B45309;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+    }
+    
+    .providers-hint p {
+      font-size: 13px;
+      color: #92400E;
+      margin-bottom: 10px;
+    }
+    
+    .provider-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    
+    .provider-tag {
+      background: white;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      border: 1px solid #FDE68A;
+    }
+    
+    .time-hint {
+      color: var(--text-muted);
+      font-size: 13px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .verify-btn {
+      width: 100%;
+      padding: 14px;
+      background: var(--success);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .verify-btn:hover {
+      filter: brightness(1.05);
+    }
+    
+    .verify-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    
+    .verify-status {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      display: none;
+    }
+    
+    .verify-status.error {
+      display: block;
+      background: #FEF2F2;
+      border: 1px solid #FECACA;
+      color: #B91C1C;
+    }
+    
+    .verify-status.success {
+      display: block;
+      background: #ECFDF5;
+      border: 1px solid #A7F3D0;
+      color: #047857;
+    }
+    
+    .back-btn {
+      width: 100%;
+      margin-top: 12px;
+      padding: 12px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+    
+    .back-btn:hover {
+      background: var(--bg-subtle);
+    }
+    
+    /* Success State */
+    .success-state {
+      text-align: center;
+      padding: 20px;
+    }
+    
+    .success-state .icon {
+      font-size: 64px;
+      margin-bottom: 20px;
+    }
+    
+    .success-state h2 {
+      text-align: center;
+      margin-bottom: 12px;
+    }
+    
+    .success-state .namespace {
+      font-size: 28px;
+      color: var(--primary);
+      font-family: 'JetBrains Mono', monospace;
+      margin-bottom: 16px;
+      font-weight: 700;
+    }
+    
+    .success-state p {
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+      font-size: 15px;
+    }
+    
+    .app-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    
+    .app-btn {
+      background: var(--text);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    
+    .app-btn:hover {
+      background: #333;
+    }
+    
+    .done-btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 12px 32px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .done-btn:hover {
+      background: var(--primary-dark);
+    }
+    
+    /* Footer */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+    
+    footer a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+    
+    footer a:hover {
+      text-decoration: underline;
+    }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+      .comparison-row {
+        grid-template-columns: 1fr;
+      }
+      
+      .tier-selector {
+        grid-template-columns: 1fr;
+      }
+      
+      .pricing-grid {
+        grid-template-columns: 1fr;
+        max-width: 350px;
+      }
+      
+      .namespace-input-wrapper {
+        flex-direction: column;
+        gap: 8px;
+      }
+      
+      .namespace-suffix {
+        justify-content: center;
+        padding: 8px;
+      }
+      
+      .check-btn {
+        width: 100%;
+      }
+      
+      .nav-links {
+        display: none;
+      }
+      
+      .hero {
+        padding: 60px 0 40px;
+      }
+      
+      section {
+        padding: 60px 0;
+      }
+    }
+    
+    /* Loading spinner */
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+    
+    .spinner.dark {
+      border-color: rgba(0,0,0,0.1);
+      border-top-color: var(--primary);
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navigation -->
+  <nav>
+    <div class="container">
+      <a href="/" class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+        GNS
+      </a>
+      <div class="nav-links">
+        <a href="/#how">How</a>
+        <a href="/#features">Features</a>
+        <a href="/#tech">Tech</a>
+        <a href="https://github.com/cayerbe/gns-protocol" class="btn-github">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="badge">
+        <span class="dot"></span>
+        Organization Namespaces
+      </div>
+      <h1>One namespace.<br><span>Your whole team.</span></h1>
+      <p>Cryptographic identity for organizations. No passwords, no per-seat fees.</p>
+      
+      <!-- Namespace Checker -->
+      <div class="namespace-checker">
+        <div class="namespace-input-wrapper" id="namespace-wrapper">
+          <input 
+            type="text" 
+            id="namespace-input" 
+            placeholder="yourcompany"
+            maxlength="20"
+            autocomplete="off"
+          >
+          <span class="namespace-suffix">@</span>
+          <button class="check-btn" id="check-btn" onclick="checkNamespace()">
+            Check
+          </button>
+        </div>
+        <div class="namespace-status" id="namespace-status"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- What You Get -->
+  <section class="what-you-get">
+    <div class="container">
+      <h2>What's Included</h2>
+      <p class="subtitle">One namespace, unlimited possibilities</p>
+      
+      <div class="namespace-example">
+        <div class="company-name">
+          <span>🏢</span>
+          <span id="example-namespace">yourcompany</span>@
+        </div>
+        <div class="team-tree">
+          <div class="team-member">
+            <span class="handle"><span class="ex-ns">yourcompany</span>@johnsmith</span>
+            <span class="role">👤 Person</span>
+          </div>
+          <div class="team-member">
+            <span class="handle"><span class="ex-ns">yourcompany</span>@marypeterson</span>
+            <span class="role">👤 Person</span>
+          </div>
+          <div class="team-member">
+            <span class="handle"><span class="ex-ns">yourcompany</span>@delivery_truck1</span>
+            <span class="role">🔌 IoT Device</span>
+          </div>
+          <div class="team-member">
+            <span class="handle"><span class="ex-ns">yourcompany</span>@humanresources</span>
+            <span class="role">📋 Position</span>
+          </div>
+          <div class="team-member">
+            <span class="handle"><span class="ex-ns">yourcompany</span>@ceo</span>
+            <span class="role">📋 Position</span>
+          </div>
+        </div>
+      </div>
+      
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="icon">✉️</div>
+          <h3>Encrypted Messages</h3>
+          <p>End-to-end encrypted communication for your entire team</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">💰</div>
+          <h3>Accept Payments</h3>
+          <p>Each member can receive payments via Stellar blockchain</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🔐</div>
+          <h3>Verified Affiliation</h3>
+          <p>Cryptographic proof of employment, no central database</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🌐</div>
+          <h3>gSite Profiles</h3>
+          <p>Verified profiles at gcrumbs.com/company@member</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Security Benefits -->
+  <section class="security-section">
+    <div class="container">
+      <h2>🔐 Why GNS?</h2>
+      <p class="subtitle">Traditional identity vs. cryptographic ownership</p>
+      
+      <div class="comparison-table">
+        <div class="comparison-row header">
+          <div class="comparison-cell traditional">
+            <strong>Traditional Systems</strong>
+          </div>
+          <div class="comparison-cell gns">
+            <strong>GNS Namespace</strong>
+          </div>
+        </div>
+        <div class="comparison-row">
+          <div class="comparison-cell traditional">❌ Passwords & 2FA</div>
+          <div class="comparison-cell gns">✅ Cryptographic keys only</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comparison-cell traditional">❌ Phishing vulnerable</div>
+          <div class="comparison-cell gns">✅ DNS-verified ownership</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comparison-cell traditional">❌ Central servers (breaches)</div>
+          <div class="comparison-cell gns">✅ Decentralized (no honeypot)</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comparison-cell traditional">❌ Vendor controls data</div>
+          <div class="comparison-cell gns">✅ You own your keys</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comparison-cell traditional">❌ Per-seat fees forever</div>
+          <div class="comparison-cell gns">✅ Flat annual fee</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section class="pricing-section" id="pricing">
+    <div class="container" style="text-align: center;">
+      <h2>Simple Pricing</h2>
+      <div class="savings-badge">💰 Save 90%+ vs traditional identity providers</div>
+      
+      <div class="pricing-grid">
+        <div class="pricing-card" data-tier="starter">
+          <div class="tier-icon">🚀</div>
+          <h3>Starter</h3>
+          <div class="price">$49 <span>/year</span></div>
+          <div class="users">Up to 10 users</div>
+          <ul>
+            <li>1 namespace</li>
+            <li>Encrypted messaging</li>
+            <li>Team verification</li>
+            <li>Basic support</li>
+          </ul>
+          <button class="select-btn" onclick="selectTier('starter')">Select</button>
+        </div>
+        
+        <div class="pricing-card popular" data-tier="team">
+          <div class="popular-badge">Popular</div>
+          <div class="tier-icon">👥</div>
+          <h3>Team</h3>
+          <div class="price">$149 <span>/year</span></div>
+          <div class="users">Up to 50 users</div>
+          <ul>
+            <li>Everything in Starter</li>
+            <li>Priority support</li>
+            <li>Usage analytics</li>
+          </ul>
+          <button class="select-btn" onclick="selectTier('team')">Select</button>
+        </div>
+        
+        <div class="pricing-card" data-tier="business">
+          <div class="tier-icon">🏢</div>
+          <h3>Business</h3>
+          <div class="price">$299 <span>/year</span></div>
+          <div class="users">Up to 200 users</div>
+          <ul>
+            <li>Everything in Team</li>
+            <li>Custom branding</li>
+            <li>API access</li>
+          </ul>
+          <button class="select-btn" onclick="selectTier('business')">Select</button>
+        </div>
+        
+        <div class="pricing-card" data-tier="enterprise">
+          <div class="tier-icon">🏛️</div>
+          <h3>Enterprise</h3>
+          <div class="price">Custom</div>
+          <div class="users">Unlimited users</div>
+          <ul>
+            <li>Multi-brand domain verification</li>
+            <li>99.9% SLA guarantee</li>
+            <li>Dedicated account manager</li>
+            <li>Trademark-based claims</li>
+            <li>Custom integrations</li>
+          </ul>
+          <button class="select-btn" onclick="selectTier('enterprise')">Contact Us</button>
+        </div>
+      </div>
+      
+      <!-- Cost Comparison -->
+      <div class="cost-comparison">
+        <h3>📊 Annual Cost Comparison</h3>
+        <table class="cost-table">
+          <thead>
+            <tr>
+              <th>Team Size</th>
+              <th class="gns-col">GNS</th>
+              <th>Google</th>
+              <th>Microsoft</th>
+              <th>Okta</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>10 users</td>
+              <td class="gns-col">$49</td>
+              <td>$720+</td>
+              <td>$720+</td>
+              <td>$240+</td>
+            </tr>
+            <tr>
+              <td>50 users</td>
+              <td class="gns-col">$149</td>
+              <td>$3,600+</td>
+              <td>$3,600+</td>
+              <td>$1,200+</td>
+            </tr>
+            <tr>
+              <td>200 users</td>
+              <td class="gns-col">$299</td>
+              <td>$14,400+</td>
+              <td>$14,400+</td>
+              <td>$4,800+</td>
+            </tr>
+            <tr>
+              <td colspan="5" class="savings">
+                ✅ No per-seat fees — flat pricing includes identity + messaging + payments
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section class="how-section">
+    <div class="container">
+      <h2>How It Works</h2>
+      <p class="subtitle">Get your namespace in 4 simple steps</p>
+      
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-number">1</div>
+          <h3>Choose Namespace</h3>
+          <p>Pick your company's unique identifier</p>
+          <code>acme@</code>
+        </div>
+        <div class="step-card">
+          <div class="step-number">2</div>
+          <h3>Add DNS Record</h3>
+          <p>Verify ownership with a TXT record</p>
+          <code>gns-verify=abc123</code>
+        </div>
+        <div class="step-card">
+          <div class="step-number">3</div>
+          <h3>We Verify</h3>
+          <p>Automatic DNS verification</p>
+          <code>✓ Verified</code>
+        </div>
+        <div class="step-card">
+          <div class="step-number">4</div>
+          <h3>Team Joins</h3>
+          <p>Invite your team members</p>
+          <code>acme@alice</code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Registration Form -->
+  <section class="registration-section" id="register">
+    <div class="container">
+      <h2>Register Your Organization</h2>
+      <p class="subtitle">Complete the form to claim your namespace</p>
+      
+      <div class="registration-form">
+        <form id="registration-form" onsubmit="submitRegistration(event)">
+          <div class="form-group">
+            <label>Namespace *</label>
+            <div class="form-row">
+              <input 
+                type="text" 
+                id="form-namespace" 
+                placeholder="yourcompany"
+                maxlength="20"
+                style="flex: 1;"
+                required
+              >
+              <span class="namespace-suffix">@</span>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>Organization Name *</label>
+            <input type="text" id="form-org-name" placeholder="Your Company Inc." required>
+          </div>
+          
+          <div class="form-group">
+            <label>Website (for DNS verification) *</label>
+            <input type="url" id="form-website" placeholder="https://yourcompany.com" required>
+          </div>
+          
+          <div class="form-group">
+            <label>Business Email *</label>
+            <input type="email" id="form-email" placeholder="admin@yourcompany.com" required>
+          </div>
+          
+          <div class="form-group">
+            <label>Description</label>
+            <textarea id="form-description" placeholder="Tell us about your organization..." maxlength="200"></textarea>
+          </div>
+          
+          <div class="form-group">
+            <label>Select Plan *</label>
+            <div class="tier-selector">
+              <div class="tier-option selected" data-tier="starter" onclick="selectFormTier('starter')">
+                <div class="tier-header">
+                  <div class="tier-name">🚀 Starter</div>
+                  <div class="tier-price">$49/yr</div>
+                </div>
+                <div class="tier-users">Up to 10 team members</div>
+                <ul class="tier-features">
+                  <li>1 namespace (yourco@)</li>
+                  <li>Encrypted messaging</li>
+                  <li>Team verification badges</li>
+                  <li>Email support</li>
+                </ul>
+              </div>
+              <div class="tier-option popular-tier" data-tier="team" onclick="selectFormTier('team')">
+                <div class="tier-header">
+                  <div class="tier-name">👥 Team</div>
+                  <div class="tier-price">$149/yr</div>
+                </div>
+                <div class="tier-users">Up to 50 team members</div>
+                <ul class="tier-features">
+                  <li>Everything in Starter</li>
+                  <li>Priority support (24h)</li>
+                  <li>Usage analytics dashboard</li>
+                  <li>Admin controls</li>
+                </ul>
+              </div>
+              <div class="tier-option" data-tier="business" onclick="selectFormTier('business')">
+                <div class="tier-header">
+                  <div class="tier-name">🏢 Business</div>
+                  <div class="tier-price">$299/yr</div>
+                </div>
+                <div class="tier-users">Up to 200 team members</div>
+                <ul class="tier-features">
+                  <li>Everything in Team</li>
+                  <li>Custom branding</li>
+                  <li>Full API access</li>
+                  <li>SSO integration</li>
+                </ul>
+              </div>
+              <div class="tier-option" data-tier="enterprise" onclick="selectFormTier('enterprise')">
+                <div class="tier-header">
+                  <div class="tier-name">🏛️ Enterprise</div>
+                  <div class="tier-price">Custom</div>
+                </div>
+                <div class="tier-users">Unlimited team members</div>
+                <ul class="tier-features">
+                  <li>Multi-brand domains</li>
+                  <li>99.9% SLA guarantee</li>
+                  <li>Dedicated account manager</li>
+                  <li>Trademark-based claims</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          
+          <button type="submit" class="submit-btn" id="submit-btn">
+            Continue to DNS Verification →
+          </button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- Verification Modal -->
+  <div class="modal-overlay" id="verification-modal">
+    <div class="modal">
+      <h2>🔐 Verify Domain Ownership</h2>
+      <p class="modal-subtitle">
+        Add this DNS TXT record to <strong id="modal-domain">yourdomain.com</strong>
+      </p>
+      
+      <div class="dns-instructions">
+        <div class="dns-field">
+          <label>Record Type</label>
+          <div class="dns-value">
+            <code>TXT</code>
+          </div>
+        </div>
+        <div class="dns-field">
+          <label>Host / Name</label>
+          <div class="dns-value">
+            <code>@</code>
+            <span style="color: var(--text-muted);">or</span>
+            <code id="modal-host">yourdomain.com</code>
+          </div>
+        </div>
+        <div class="dns-field">
+          <label>Value (click to copy)</label>
+          <div class="dns-value" onclick="copyVerificationCode()" style="cursor: pointer;">
+            <code id="verification-code">gns-verify=loading...</code>
+            <button class="copy-btn" type="button">📋 Copy</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="providers-hint">
+        <h4>💡 Where to add this?</h4>
+        <p>Log in to your DNS provider:</p>
+        <div class="provider-tags">
+          <span class="provider-tag">Cloudflare</span>
+          <span class="provider-tag">GoDaddy</span>
+          <span class="provider-tag">Namecheap</span>
+          <span class="provider-tag">Google Domains</span>
+          <span class="provider-tag">Route 53</span>
+        </div>
+      </div>
+      
+      <p class="time-hint">
+        ⏱️ DNS changes can take 5 min to 24 hours to propagate
+      </p>
+      
+      <button class="verify-btn" onclick="verifyDns()" id="verify-btn">
+        ✓ Verify DNS Record
+      </button>
+      
+      <div class="verify-status" id="verify-status"></div>
+      
+      <button class="back-btn" onclick="closeModal()">
+        ← Back to form
+      </button>
+    </div>
+  </div>
+
+  <!-- Success Modal -->
+  <div class="modal-overlay" id="success-modal">
+    <div class="modal">
+      <div class="success-state">
+        <div class="icon">🎉</div>
+        <h2>Namespace Registered!</h2>
+        <div class="namespace" id="success-namespace">yourcompany@</div>
+        <p>Your organization namespace is active. Download the app to invite team members!</p>
+        <div class="app-buttons">
+          <a href="https://apps.apple.com" target="_blank" class="app-btn">
+            📱 App Store
+          </a>
+          <a href="https://play.google.com" target="_blank" class="app-btn">
+            🤖 Play Store
+          </a>
+        </div>
+        <button class="done-btn" onclick="location.href='/'">
+          Go to Homepage
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>🌍 GNS — Identity through Presence</p>
+      <p style="margin-top: 8px;">
+        <a href="/">Home</a> · 
+        <a href="https://github.com/cayerbe/gns-protocol">GitHub</a> · 
+        <a href="/cdn-cgi/l/email-protection#442c2128282b04232736312926376a272b29">Contact</a>
+      </p>
+    </div>
+  </footer>
+
+  <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+    // ===========================================
+    // CONFIGURATION
+    // ===========================================
+    const API_BASE = 'https://gns-browser-production.up.railway.app';
+    
+    // State
+    let selectedTier = 'starter';
+    let currentRegistration = null;
+    
+    // ===========================================
+    // NAMESPACE CHECKER
+    // ===========================================
+    const namespaceInput = document.getElementById('namespace-input');
+    const namespaceWrapper = document.getElementById('namespace-wrapper');
+    const namespaceStatus = document.getElementById('namespace-status');
+    
+    // Update example namespace as user types
+    namespaceInput.addEventListener('input', (e) => {
+      const value = e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '');
+      e.target.value = value;
+      
+      // Update all examples
+      const displayName = value || 'yourcompany';
+      document.getElementById('example-namespace').textContent = displayName;
+      document.querySelectorAll('.ex-ns').forEach(el => el.textContent = displayName);
+      
+      // Reset status
+      namespaceWrapper.classList.remove('available', 'taken');
+      namespaceStatus.className = 'namespace-status';
+    });
+    
+    async function checkNamespace() {
+      const namespace = namespaceInput.value.trim().toLowerCase();
+      
+      if (!namespace || namespace.length < 3) {
+        namespaceStatus.textContent = '⚠️ Namespace must be at least 3 characters';
+        namespaceStatus.className = 'namespace-status taken';
+        namespaceWrapper.classList.remove('available');
+        namespaceWrapper.classList.add('taken');
+        return;
+      }
+      
+      const btn = document.getElementById('check-btn');
+      btn.innerHTML = '<span class="spinner"></span>';
+      btn.disabled = true;
+      
+      try {
+        const response = await fetch(`${API_BASE}/org/check/${namespace}`);
+        const data = await response.json();
+        
+        if (data.success && data.data.available) {
+          namespaceStatus.innerHTML = `✅ <strong>${namespace}@</strong> is available! <a href="#register" style="color: var(--primary);">Register now →</a>`;
+          namespaceStatus.className = 'namespace-status available';
+          namespaceWrapper.classList.add('available');
+          namespaceWrapper.classList.remove('taken');
+          
+          // Auto-fill form
+          document.getElementById('form-namespace').value = namespace;
+        } else {
+          namespaceStatus.textContent = `❌ ${namespace}@ is already taken`;
+          namespaceStatus.className = 'namespace-status taken';
+          namespaceWrapper.classList.add('taken');
+          namespaceWrapper.classList.remove('available');
+        }
+      } catch (error) {
+        namespaceStatus.textContent = '⚠️ Could not check availability. Please try again.';
+        namespaceStatus.className = 'namespace-status taken';
+      }
+      
+      btn.innerHTML = 'Check';
+      btn.disabled = false;
+    }
+    
+    // Check on Enter key
+    namespaceInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        checkNamespace();
+      }
+    });
+    
+    // ===========================================
+    // TIER SELECTION
+    // ===========================================
+    function selectTier(tier) {
+      document.querySelectorAll('.pricing-card').forEach(card => {
+        card.classList.remove('selected');
+        if (card.dataset.tier === tier) {
+          card.classList.add('selected');
+        }
+      });
+      
+      selectFormTier(tier);
+      document.getElementById('register').scrollIntoView({ behavior: 'smooth' });
+    }
+    
+    function selectFormTier(tier) {
+      selectedTier = tier;
+      document.querySelectorAll('.tier-option').forEach(opt => {
+        opt.classList.remove('selected');
+        if (opt.dataset.tier === tier) {
+          opt.classList.add('selected');
+        }
+      });
+    }
+    
+    // ===========================================
+    // REGISTRATION FORM
+    // ===========================================
+    async function submitRegistration(event) {
+      event.preventDefault();
+      
+      const namespace = document.getElementById('form-namespace').value.trim().toLowerCase();
+      const orgName = document.getElementById('form-org-name').value.trim();
+      const website = document.getElementById('form-website').value.trim();
+      const email = document.getElementById('form-email').value.trim();
+      const description = document.getElementById('form-description').value.trim();
+      
+      if (namespace.length < 3) {
+        alert('Namespace must be at least 3 characters');
+        return;
+      }
+      
+      const submitBtn = document.getElementById('submit-btn');
+      submitBtn.innerHTML = '<span class="spinner"></span> Processing...';
+      submitBtn.disabled = true;
+      
+      try {
+        let domain = website.toLowerCase()
+          .replace(/^https?:\/\//, '')
+          .replace(/^www\./, '')
+          .split('/')[0];
+        
+        const response = await fetch(`${API_BASE}/org/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            namespace,
+            organization_name: orgName,
+            website,
+            domain,
+            email,
+            description,
+            tier: selectedTier,
+          }),
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          currentRegistration = {
+            id: data.data.registration_id,
+            namespace: data.data.namespace,
+            domain: data.data.domain,
+            verificationCode: data.data.verification_code,
+          };
+          
+          document.getElementById('modal-domain').textContent = currentRegistration.domain;
+          document.getElementById('modal-host').textContent = currentRegistration.domain;
+          document.getElementById('verification-code').textContent = `gns-verify=${currentRegistration.verificationCode}`;
+          document.getElementById('verification-modal').classList.add('active');
+        } else {
+          alert(data.error || 'Registration failed. Please try again.');
+        }
+      } catch (error) {
+        console.error('Registration error:', error);
+        alert('Registration failed. Please try again.');
+      }
+      
+      submitBtn.innerHTML = 'Continue to DNS Verification →';
+      submitBtn.disabled = false;
+    }
+    
+    // ===========================================
+    // DNS VERIFICATION
+    // ===========================================
+    function copyVerificationCode() {
+      const code = document.getElementById('verification-code').textContent;
+      navigator.clipboard.writeText(code);
+      
+      const btn = document.querySelector('.dns-value .copy-btn');
+      btn.textContent = '✓ Copied!';
+      setTimeout(() => btn.textContent = '📋 Copy', 2000);
+    }
+    
+    async function verifyDns() {
+      if (!currentRegistration) return;
+      
+      const btn = document.getElementById('verify-btn');
+      const status = document.getElementById('verify-status');
+      
+      btn.innerHTML = '<span class="spinner"></span> Checking DNS...';
+      btn.disabled = true;
+      status.className = 'verify-status';
+      
+      try {
+        const response = await fetch(`${API_BASE}/org/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            registration_id: currentRegistration.id,
+            domain: currentRegistration.domain,
+            verification_code: currentRegistration.verificationCode,
+          }),
+        });
+        
+        const data = await response.json();
+        
+        if (data.success && data.data.verified) {
+          if (selectedTier === 'enterprise') {
+            status.innerHTML = '✅ Domain verified! Our team will contact you within 24 hours.';
+            status.className = 'verify-status success';
+          } else {
+            closeModal();
+            document.getElementById('success-namespace').textContent = `${currentRegistration.namespace}@`;
+            document.getElementById('success-modal').classList.add('active');
+          }
+        } else {
+          status.innerHTML = `❌ ${data.error || 'DNS record not found. Please wait for DNS propagation and try again.'}`;
+          status.className = 'verify-status error';
+        }
+      } catch (error) {
+        status.innerHTML = '❌ Verification failed. Please try again.';
+        status.className = 'verify-status error';
+      }
+      
+      btn.innerHTML = '✓ Verify DNS Record';
+      btn.disabled = false;
+    }
+    
+    function closeModal() {
+      document.getElementById('verification-modal').classList.remove('active');
+    }
+    
+    document.getElementById('verifi

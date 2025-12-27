@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>GNS</title>
+  <script>
+    // Redirect all 404s to index.html for SPA routing
+    sessionStorage.setItem('gns_redirect', window.location.pathname);
+    window.location.replace('/');
+  </script>
+</head>
+<body></body>
+</html>
