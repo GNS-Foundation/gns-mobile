@@ -134,7 +134,8 @@ router.get('/', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) 
 
     return res.json({
       success: true,
-      data: envelopes,
+      messages: envelopes,  // For mobile app compatibility
+      data: envelopes,      // For browser/other clients
       count: envelopes.length,
     } as ApiResponse);
 
