@@ -257,6 +257,10 @@ router.get('/conversation', verifySessionAuth, async (req: AuthenticatedRequest,
         encryptedPayload: envelope.encryptedPayload,
         ephemeralPublicKey: envelope.ephemeralPublicKey,
         nonce: envelope.nonce,
+        // ✅ FIX: Also include sender fields at top level for outgoing messages
+        senderEncryptedPayload: envelope.senderEncryptedPayload || null,
+        senderEphemeralPublicKey: envelope.senderEphemeralPublicKey || null,
+        senderNonce: envelope.senderNonce || null,
       };
     });
 
