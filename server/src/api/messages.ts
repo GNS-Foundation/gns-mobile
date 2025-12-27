@@ -246,7 +246,7 @@ router.post('/presence', verifyGnsAuth, async (req: AuthenticatedRequest, res: R
 /**
  * POST /messages/send
  * Simplified message sending for QR-paired browsers
- * Uses session token instead of signature-based auth
+ * NOW SUPPORTS: Full encrypted envelopes
  */
 router.post('/send', async (req: Request, res: Response) => {
   try {
@@ -290,13 +290,13 @@ router.post('/send', async (req: Request, res: Response) => {
     // Update last used
     await db.updateBrowserSessionLastUsed(sessionToken);
 
-    // Get message content
-    const { to, content, threadId } = req.body;
+    // Get message content - supports both encrypted envelope and plaintext
+    const { to, envelope, content, threadId } = req.body;
 
-    if (!to || !content) {
+    if (!to) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: to, content',
+        error: 'Missing required field: to',
       } as ApiResponse);
     }
 
@@ -307,50 +307,76 @@ router.post('/send', async (req: Request, res: Response) => {
       } as ApiResponse);
     }
 
-    // Get sender's identity
-    const senderHandle = session.handle || session.publicKey.substring(0, 8);
     const recipientKey = to.toLowerCase();
+    const senderHandle = session.handle || session.publicKey.substring(0, 8);
 
-    // Create message envelope
-    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const actualThreadId = threadId || `thread_${session.publicKey}_${recipientKey}`;
+    // Check if we received an encrypted envelope (preferred) or plaintext (legacy)
+    let messageEnvelope;
+    let isEncrypted = false;
 
-    const envelope = {
-      id: messageId,
-      type: 'direct',
-      fromPublicKey: session.publicKey,
-      fromHandle: senderHandle,
-      toPublicKeys: [recipientKey],
-      payloadType: 'gns/text.plain',
-      encryptedPayload: content, // Note: Should be encrypted in production
-      threadId: actualThreadId,
-      timestamp: Date.now(),
-    };
+    if (envelope && envelope.encryptedPayload && envelope.ephemeralPublicKey && envelope.nonce) {
+      // ✅ ENCRYPTED ENVELOPE - Use as-is
+      console.log(`📨 Encrypted message: ${senderHandle} → ${recipientKey.substring(0, 8)}...`);
+      messageEnvelope = {
+        ...envelope,
+        fromPublicKey: session.publicKey,  // Ensure sender matches session
+        fromHandle: senderHandle,
+      };
+      isEncrypted = true;
+    } else if (content) {
+      // ⚠️ PLAINTEXT FALLBACK - Create simple envelope (not recommended)
+      console.log(`⚠️ Plaintext message: ${senderHandle} → ${recipientKey.substring(0, 8)}...`);
+      console.log(`   WARNING: Message is NOT end-to-end encrypted!`);
+
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const actualThreadId = threadId || `thread_${session.publicKey}_${recipientKey}`;
+
+      messageEnvelope = {
+        id: messageId,
+        type: 'direct',
+        fromPublicKey: session.publicKey,
+        fromHandle: senderHandle,
+        toPublicKeys: [recipientKey],
+        payloadType: 'gns/text.plain',
+        encryptedPayload: content,  // NOT ENCRYPTED!
+        threadId: actualThreadId,
+        timestamp: Date.now(),
+        // Mark as plaintext for echo bot
+        _plaintext: true,
+      };
+      isEncrypted = false;
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: envelope or content',
+      } as ApiResponse);
+    }
+
+    const actualThreadId = messageEnvelope.threadId || threadId || `thread_${session.publicKey}_${recipientKey}`;
 
     // Store message in database
     const message = await db.createEnvelopeMessage(
       session.publicKey,
       recipientKey,
-      envelope,
+      messageEnvelope,
       actualThreadId
     );
 
     // Deliver via WebSocket if recipient is connected
     notifyRecipients([recipientKey], {
       type: 'message',
-      data: envelope,
+      data: messageEnvelope,
     });
-
-    console.log(`📨 Browser message: ${senderHandle} → ${recipientKey.substring(0, 8)}...`);
 
     return res.json({
       success: true,
-      message: 'Message sent',
+      message: isEncrypted ? 'Encrypted message sent' : 'Message sent (plaintext)',
       data: {
-        messageId: messageId,
+        messageId: messageEnvelope.id,
         threadId: actualThreadId,
-        timestamp: envelope.timestamp,
+        timestamp: messageEnvelope.timestamp,
         created_at: message.created_at,
+        encrypted: isEncrypted,
       },
     } as ApiResponse);
 
@@ -471,12 +497,14 @@ router.get('/inbox', verifyGnsAuth, async (req: AuthenticatedRequest, res: Respo
           env.encryptedPayload = JSON.stringify(env.encryptedPayload);
         }
 
-        // ALWAYS include from_pk for grouping
+        // ✅ FIX: ALWAYS include from_pk for grouping in browser
         return {
           ...env,
           from_pk: m.from_pk,
           fromPublicKey: env.fromPublicKey || m.from_pk,
+          to_pk: m.to_pk,
           created_at: m.created_at,
+          id: m.id,
         };
       }),
       total: messages.length,
