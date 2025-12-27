@@ -2,6 +2,8 @@
 // GNS NODE - AUTH SESSIONS API
 // Secure QR-based browser pairing
 // 
+// UPDATED: Now passes X25519 private key to browser for decryption
+// 
 // Location: routes/auth_sessions.ts
 // ===========================================
 
@@ -30,6 +32,7 @@ interface PendingSession {
   publicKey?: string;
   handle?: string;
   encryptionKey?: string;
+  encryptionPrivateKey?: string;  // ✅ NEW: X25519 private key for browser decryption
   sessionToken?: string;
   approvedAt?: number;
 }
@@ -144,8 +147,11 @@ router.get('/:id', async (req: Request, res: Response) => {
       responseData.publicKey = session.publicKey;
       responseData.handle = session.handle;
       responseData.encryptionKey = session.encryptionKey;
+      responseData.encryptionPrivateKey = session.encryptionPrivateKey;  // ✅ NEW
       responseData.sessionToken = session.sessionToken;
       responseData.approvedAt = session.approvedAt;
+
+      console.log(`🔑 Sending encryption keys to browser for session ${sessionId.substring(0, 8)}...`);
 
       // Clean up after browser receives approval
       // Give 30 seconds to receive before cleanup
@@ -171,10 +177,19 @@ router.get('/:id', async (req: Request, res: Response) => {
 // ===========================================
 // POST /auth/session/approve
 // Mobile approves a browser session
+// ✅ UPDATED: Now accepts X25519 private key for browser decryption
 // ===========================================
 router.post('/approve', async (req: Request, res: Response) => {
   try {
-    const { sessionId, publicKey, signature, deviceInfo } = req.body;
+    const {
+      sessionId,
+      publicKey,
+      handle,           // ✅ NEW: Handle from mobile
+      signature,
+      encryptionKey,    // ✅ NEW: X25519 public key from mobile
+      encryptionPrivateKey,  // ✅ NEW: X25519 private key for browser decryption
+      deviceInfo
+    } = req.body;
 
     // Validate inputs
     if (!sessionId || !publicKey || !signature) {
@@ -239,7 +254,7 @@ router.post('/approve', async (req: Request, res: Response) => {
       } as ApiResponse);
     }
 
-    // Get user's identity info (handle, encryption key)
+    // Get user's identity info from database as fallback
     const identity = await db.getIdentity(publicKey);
 
     if (!identity) {
@@ -249,19 +264,36 @@ router.post('/approve', async (req: Request, res: Response) => {
       } as ApiResponse);
     }
 
-    // Get handle if exists
-    const alias = await db.getAliasByPk(publicKey);
+    // Get handle from request body first, then fall back to database
+    let userHandle = handle;
+    if (!userHandle) {
+      const alias = await db.getAliasByPk(publicKey);
+      userHandle = alias?.handle;
+    }
 
     // Generate session token
     const sessionToken = randomBytes(32).toString('hex');
 
+    // ✅ Use encryption keys from mobile if provided, otherwise fall back to database
+    const finalEncryptionKey = encryptionKey || identity.encryption_key;
+
     // Update session
     session.status = 'approved';
     session.publicKey = publicKey.toLowerCase();
-    session.handle = alias?.handle || undefined;
-    session.encryptionKey = identity.encryption_key;
+    session.handle = userHandle || undefined;
+    session.encryptionKey = finalEncryptionKey;
+    session.encryptionPrivateKey = encryptionPrivateKey || undefined;  // ✅ NEW
     session.sessionToken = sessionToken;
     session.approvedAt = Date.now();
+
+    // Log what we're storing
+    console.log(`✅ Auth session approved: ${sessionId.substring(0, 8)}... by @${session.handle || publicKey.substring(0, 8)}`);
+    if (session.encryptionKey) {
+      console.log(`   🔑 X25519 Public:  ${session.encryptionKey.substring(0, 16)}...`);
+    }
+    if (session.encryptionPrivateKey) {
+      console.log(`   🔑 X25519 Private: ${session.encryptionPrivateKey.substring(0, 16)}... (for browser decryption)`);
+    }
 
     // Store browser session in database for future validation
     await db.createBrowserSession({
@@ -274,8 +306,6 @@ router.post('/approve', async (req: Request, res: Response) => {
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
     });
 
-    console.log(`✅ Auth session approved: ${sessionId.substring(0, 8)}... by @${session.handle || publicKey.substring(0, 8)}`);
-
     // Notify browser via WebSocket if connected
     // (Browser might be polling, but WebSocket is faster)
     const browserWs = connectedClients.get(`session:${sessionId}`);
@@ -286,6 +316,8 @@ router.post('/approve', async (req: Request, res: Response) => {
           sessionId,
           publicKey: session.publicKey,
           handle: session.handle,
+          encryptionKey: session.encryptionKey,
+          encryptionPrivateKey: session.encryptionPrivateKey,  // ✅ NEW
           sessionToken,
         }));
       });
