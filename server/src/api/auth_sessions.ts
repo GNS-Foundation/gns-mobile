@@ -250,7 +250,7 @@ router.post('/approve', async (req: Request, res: Response) => {
     }
 
     // Get handle if exists
-    const alias = await db.getAliasByIdentity(publicKey);
+    const alias = await db.getAliasByPk(publicKey);
 
     // Generate session token
     const sessionToken = randomBytes(32).toString('hex');
