@@ -399,6 +399,44 @@ router.get('/inbox', verifySessionAuth, async (req: AuthenticatedRequest, res: R
 // LEGACY ENDPOINTS (Backward Compatible)
 // ===========================================
 
+// POST /messages/ack - Acknowledge received messages (MUST be before /:to_pk!)
+router.post('/ack', verifyGnsAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pk = req.gnsPublicKey!;
+    const { messageIds } = req.body;
+
+    if (!messageIds || !Array.isArray(messageIds)) {
+      return res.status(400).json({
+        success: false,
+        error: 'messageIds array required',
+      } as ApiResponse);
+    }
+
+    console.log(`✅ ACK ${messageIds.length} messages for ${pk.substring(0, 16)}...`);
+
+    // Mark each message as delivered
+    for (const msgId of messageIds) {
+      try {
+        await db.markMessageDelivered(msgId);
+      } catch (error) {
+        console.error(`Failed to mark message ${msgId} as delivered:`, error);
+      }
+    }
+
+    return res.json({
+      success: true,
+      acknowledged: messageIds.length,
+    } as ApiResponse);
+
+  } catch (error) {
+    console.error('POST /ack error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to acknowledge messages',
+    } as ApiResponse);
+  }
+});
+
 // POST /messages/:to_pk - Send message (original format)
 router.post('/:to_pk', async (req: Request, res: Response) => {
   try {
