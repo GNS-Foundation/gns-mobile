@@ -821,6 +821,7 @@ export async function createDualEncryptedMessage(messageData: {
       // Recipient encryption (existing fields)
       payload: messageData.encrypted_payload || messageData.envelope?.encryptedPayload || '',
       envelope: messageData.envelope,
+      signature: messageData.envelope?.signature || '',
 
       // Sender encryption (NEW - dual encryption)
       sender_encrypted_payload: messageData.sender_encrypted_payload || null,
