@@ -381,9 +381,11 @@ router.get('/inbox', verifySessionAuth, async (req: AuthenticatedRequest, res: R
       };
     }));
 
+
     return res.json({
       success: true,
-      data: transformed,
+      messages: transformed,  // For mobile app compatibility
+      data: transformed,      // For browser/other clients
       total: transformed.length,
     } as ApiResponse);
 
