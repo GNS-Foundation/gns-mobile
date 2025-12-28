@@ -370,6 +370,11 @@ router.get('/inbox', verifySessionAuth, async (req: AuthenticatedRequest, res: R
         envelope.encryptedPayload = m.sender_encrypted_payload;
         envelope.ephemeralPublicKey = m.sender_ephemeral_public_key;
         envelope.nonce = m.sender_nonce;
+      } else {
+        // ✅ INCOMING messages - use individual columns as fallback
+        envelope.encryptedPayload = envelope.encryptedPayload || m.encrypted_payload || m.payload;
+        envelope.ephemeralPublicKey = envelope.ephemeralPublicKey || m.ephemeral_public_key;
+        envelope.nonce = envelope.nonce || m.nonce;
       }
 
       // ✅ FIX: Fetch handles for sender and recipient
