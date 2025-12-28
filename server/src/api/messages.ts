@@ -291,11 +291,18 @@ router.get('/conversation', verifySessionAuth, async (req: AuthenticatedRequest,
         envelope.senderEphemeralPublicKey = m.sender_ephemeral_public_key;
         envelope.senderNonce = m.sender_nonce;
       } else {
-        // INCOMING: Use recipient's encrypted copy OR legacy envelope
+        // INCOMING: Use recipient's encrypted copy OR legacy envelope OR payload column
         const env = m.envelope || {};
-        envelope.encryptedPayload = env.encryptedPayload || m.encrypted_payload;
+        envelope.encryptedPayload = env.encryptedPayload || m.encrypted_payload || m.payload;
         envelope.ephemeralPublicKey = env.ephemeralPublicKey || m.ephemeral_public_key;
         envelope.nonce = env.nonce || m.nonce;
+
+        // DEBUG: Log what we found
+        console.log(`📨 Loading incoming message ${m.id}:`);
+        console.log(`   env.encryptedPayload: ${env.encryptedPayload ? 'YES' : 'NO'}`);
+        console.log(`   m.encrypted_payload: ${m.encrypted_payload ? 'YES' : 'NO'}`);
+        console.log(`   m.payload: ${m.payload ? 'YES' : 'NO'}`);
+        console.log(`   Final encryptedPayload: ${envelope.encryptedPayload ? 'YES' : 'NO'}`);
       }
 
 

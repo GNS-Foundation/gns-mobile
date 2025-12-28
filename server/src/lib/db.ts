@@ -668,6 +668,10 @@ export async function createEnvelopeMessage(
       status: 'pending',
       relay_id: process.env.NODE_ID,
       expires_at: null,
+      // ✅ Also populate individual columns for easier querying
+      encrypted_payload: envelope.encryptedPayload || payloadString,
+      ephemeral_public_key: envelope.ephemeralPublicKey || null,
+      nonce: envelope.nonce || null,
     })
     .select()
     .single();
