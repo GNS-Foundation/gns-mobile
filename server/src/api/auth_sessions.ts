@@ -530,14 +530,14 @@ export async function verifyBrowserSession(
     
     const session = await db.getBrowserSession(sessionToken);
     
-    if (!session || !session.isActive) {
+    if (!session || session.status !== 'approved') {
       return res.status(401).json({
         success: false,
         error: 'Invalid or expired session',
       } as ApiResponse);
     }
     
-    if (new Date() > session.expiresAt) {
+    if (new Date() > new Date(session.expires_at)) {
       await db.revokeBrowserSession(sessionToken);
       return res.status(401).json({
         success: false,
@@ -548,7 +548,7 @@ export async function verifyBrowserSession(
     await db.updateBrowserSessionLastUsed(sessionToken);
     
     (req as any).browserSession = session;
-    (req as any).gnsPublicKey = session.publicKey;
+    (req as any).gnsPublicKey = session.public_key;
     
     next();
   } catch (error) {
