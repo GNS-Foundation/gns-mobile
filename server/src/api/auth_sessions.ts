@@ -1,10 +1,8 @@
 // ===========================================
-// GNS NODE - AUTH SESSIONS API
-// Secure QR-based browser pairing
+// GNS NODE - AUTH SESSIONS API v2
+// Secure QR-based browser pairing WITH MESSAGE SYNC
 // 
-// UPDATED: Now passes X25519 private key to browser for decryption
-// 
-// Location: routes/auth_sessions.ts
+// Phase B: Mobile sends pre-decrypted message history
 // ===========================================
 
 import { Router, Request, Response } from 'express';
@@ -17,9 +15,29 @@ import { connectedClients } from './messages';
 const router = Router();
 
 // ===========================================
-// IN-MEMORY SESSION STORE
-// In production, use Redis or database
+// TYPES
 // ===========================================
+
+interface DecryptedMessage {
+  id: string;
+  direction: 'incoming' | 'outgoing';
+  text: string;
+  timestamp: number;
+  status?: string;
+}
+
+interface ConversationSync {
+  withPublicKey: string;
+  withHandle?: string;
+  messages: DecryptedMessage[];
+  lastSyncedAt: number;
+}
+
+interface MessageSync {
+  conversations: ConversationSync[];
+  totalMessages: number;
+  syncedAt: number;
+}
 
 interface PendingSession {
   id: string;
@@ -31,10 +49,13 @@ interface PendingSession {
   // Filled when approved:
   publicKey?: string;
   handle?: string;
-  encryptionKey?: string;
-  encryptionPrivateKey?: string;  // ✅ NEW: X25519 private key for browser decryption
   sessionToken?: string;
   approvedAt?: number;
+  // NEW: Session encryption keys (temporary, per-session)
+  sessionEncryptionKey?: string;
+  sessionEncryptionPrivateKey?: string;
+  // NEW: Pre-decrypted message history from mobile
+  messageSync?: MessageSync;
 }
 
 const pendingSessions = new Map<string, PendingSession>();
@@ -50,23 +71,19 @@ setInterval(() => {
 }, 60000);
 
 // ===========================================
-// POST /auth/session/request
+// POST /auth/sessions/request
 // Browser requests a new login session
-// Returns QR code data
 // ===========================================
 router.post('/request', async (req: Request, res: Response) => {
   try {
     const { browserInfo } = req.body;
-
-    // Generate session ID and challenge
+    
     const sessionId = randomBytes(16).toString('hex');
     const challenge = randomBytes(32).toString('hex');
-
-    // Session expires in 5 minutes
+    
     const now = Date.now();
-    const expiresAt = now + 5 * 60 * 1000;
-
-    // Store pending session
+    const expiresAt = now + 5 * 60 * 1000; // 5 minutes
+    
     const session: PendingSession = {
       id: sessionId,
       challenge,
@@ -75,23 +92,21 @@ router.post('/request', async (req: Request, res: Response) => {
       expiresAt,
       status: 'pending',
     };
-
+    
     pendingSessions.set(sessionId, session);
-
+    
     console.log(`🔐 Auth session created: ${sessionId.substring(0, 8)}...`);
-
-    // Return QR data
+    
     return res.status(201).json({
       success: true,
       data: {
         sessionId,
         challenge,
         expiresAt,
-        expiresIn: 300, // seconds
-        // QR code should encode this URL:
+        expiresIn: 300,
         qrData: JSON.stringify({
           type: 'gns_browser_auth',
-          version: 1,
+          version: 2,  // Bumped version for message sync support
           sessionId,
           challenge,
           browserInfo: session.browserInfo,
@@ -99,9 +114,9 @@ router.post('/request', async (req: Request, res: Response) => {
         }),
       },
     } as ApiResponse);
-
+    
   } catch (error) {
-    console.error('POST /auth/session/request error:', error);
+    console.error('POST /auth/sessions/request error:', error);
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -110,22 +125,22 @@ router.post('/request', async (req: Request, res: Response) => {
 });
 
 // ===========================================
-// GET /auth/session/:id
+// GET /auth/sessions/:id
 // Browser polls for session status
+// NOW RETURNS: Pre-decrypted message history!
 // ===========================================
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const sessionId = req.params.id;
     const session = pendingSessions.get(sessionId);
-
+    
     if (!session) {
       return res.status(404).json({
         success: false,
         error: 'Session not found or expired',
       } as ApiResponse);
     }
-
-    // Check if expired
+    
     if (Date.now() > session.expiresAt) {
       session.status = 'expired';
       pendingSessions.delete(sessionId);
@@ -134,39 +149,43 @@ router.get('/:id', async (req: Request, res: Response) => {
         error: 'Session expired',
       } as ApiResponse);
     }
-
-    // Return current status
+    
     const responseData: any = {
       sessionId: session.id,
       status: session.status,
       expiresAt: session.expiresAt,
     };
-
-    // If approved, include the session data
+    
+    // If approved, include ALL session data
     if (session.status === 'approved') {
       responseData.publicKey = session.publicKey;
       responseData.handle = session.handle;
-      responseData.encryptionKey = session.encryptionKey;
-      responseData.encryptionPrivateKey = session.encryptionPrivateKey;  // ✅ NEW
       responseData.sessionToken = session.sessionToken;
       responseData.approvedAt = session.approvedAt;
-
-      console.log(`🔑 Sending encryption keys to browser for session ${sessionId.substring(0, 8)}...`);
-
+      
+      // NEW: Session encryption keys (temporary, for this session only)
+      responseData.sessionEncryptionKey = session.sessionEncryptionKey;
+      responseData.sessionEncryptionPrivateKey = session.sessionEncryptionPrivateKey;
+      
+      // NEW: Pre-decrypted message history from mobile
+      if (session.messageSync) {
+        responseData.messageSync = session.messageSync;
+        console.log(`📨 Sending ${session.messageSync.totalMessages} pre-decrypted messages to browser`);
+      }
+      
       // Clean up after browser receives approval
-      // Give 30 seconds to receive before cleanup
       setTimeout(() => {
         pendingSessions.delete(sessionId);
       }, 30000);
     }
-
+    
     return res.json({
       success: true,
       data: responseData,
     } as ApiResponse);
-
+    
   } catch (error) {
-    console.error('GET /auth/session/:id error:', error);
+    console.error('GET /auth/sessions/:id error:', error);
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -175,22 +194,24 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 // ===========================================
-// POST /auth/session/approve
+// POST /auth/sessions/approve
 // Mobile approves a browser session
-// ✅ UPDATED: Now accepts X25519 private key for browser decryption
+// NOW ACCEPTS: Pre-decrypted message history!
 // ===========================================
 router.post('/approve', async (req: Request, res: Response) => {
   try {
-    const {
-      sessionId,
-      publicKey,
-      handle,           // ✅ NEW: Handle from mobile
-      signature,
-      encryptionKey,    // ✅ NEW: X25519 public key from mobile
-      encryptionPrivateKey,  // ✅ NEW: X25519 private key for browser decryption
-      deviceInfo
+    const { 
+      sessionId, 
+      publicKey, 
+      signature, 
+      deviceInfo,
+      // NEW: Session encryption keys from mobile
+      sessionEncryptionKey,
+      sessionEncryptionPrivateKey,
+      // NEW: Pre-decrypted message history
+      messageSync,
     } = req.body;
-
+    
     // Validate inputs
     if (!sessionId || !publicKey || !signature) {
       return res.status(400).json({
@@ -198,31 +219,30 @@ router.post('/approve', async (req: Request, res: Response) => {
         error: 'Missing required fields: sessionId, publicKey, signature',
       } as ApiResponse);
     }
-
+    
     if (!isValidPublicKey(publicKey)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid public key format',
       } as ApiResponse);
     }
-
-    // Find session
+    
     const session = pendingSessions.get(sessionId);
-
+    
     if (!session) {
       return res.status(404).json({
         success: false,
         error: 'Session not found or expired',
       } as ApiResponse);
     }
-
+    
     if (session.status !== 'pending') {
       return res.status(409).json({
         success: false,
         error: `Session already ${session.status}`,
       } as ApiResponse);
     }
-
+    
     if (Date.now() > session.expiresAt) {
       session.status = 'expired';
       return res.status(410).json({
@@ -230,22 +250,21 @@ router.post('/approve', async (req: Request, res: Response) => {
         error: 'Session expired',
       } as ApiResponse);
     }
-
+    
     // Verify signature
-    // Mobile must sign: canonicalJson({ sessionId, challenge, publicKey, action: 'approve' })
     const signedData = {
       action: 'approve',
       challenge: session.challenge,
       publicKey: publicKey.toLowerCase(),
       sessionId,
     };
-
+    
     const isValid = verifySignature(
       publicKey,
       canonicalJson(signedData),
       signature
     );
-
+    
     if (!isValid) {
       console.warn(`❌ Invalid signature for session ${sessionId.substring(0, 8)}...`);
       return res.status(401).json({
@@ -253,49 +272,48 @@ router.post('/approve', async (req: Request, res: Response) => {
         error: 'Invalid signature - approval rejected',
       } as ApiResponse);
     }
-
-    // Get user's identity info from database as fallback
+    
+    // Get user's identity info
     const identity = await db.getIdentity(publicKey);
-
+    
     if (!identity) {
       return res.status(404).json({
         success: false,
         error: 'Identity not found - register on mobile app first',
       } as ApiResponse);
     }
-
-    // Get handle from request body first, then fall back to database
-    let userHandle = handle;
-    if (!userHandle) {
-      const alias = await db.getAliasByPk(publicKey);
-      userHandle = alias?.handle;
-    }
-
-    // Generate session token
+    
+    const alias = await db.getAliasByIdentity(publicKey);
     const sessionToken = randomBytes(32).toString('hex');
-
-    // ✅ Use encryption keys from mobile if provided, otherwise fall back to database
-    const finalEncryptionKey = encryptionKey || identity.encryption_key;
-
-    // Update session
+    
+    // Update session with approval data
     session.status = 'approved';
     session.publicKey = publicKey.toLowerCase();
-    session.handle = userHandle || undefined;
-    session.encryptionKey = finalEncryptionKey;
-    session.encryptionPrivateKey = encryptionPrivateKey || undefined;  // ✅ NEW
+    session.handle = alias?.handle || undefined;
     session.sessionToken = sessionToken;
     session.approvedAt = Date.now();
-
-    // Log what we're storing
-    console.log(`✅ Auth session approved: ${sessionId.substring(0, 8)}... by @${session.handle || publicKey.substring(0, 8)}`);
-    if (session.encryptionKey) {
-      console.log(`   🔑 X25519 Public:  ${session.encryptionKey.substring(0, 16)}...`);
+    
+    // NEW: Store session encryption keys (temporary, for this session)
+    if (sessionEncryptionKey && sessionEncryptionPrivateKey) {
+      session.sessionEncryptionKey = sessionEncryptionKey;
+      session.sessionEncryptionPrivateKey = sessionEncryptionPrivateKey;
+      console.log(`🔐 Session encryption keys stored for ${sessionId.substring(0, 8)}`);
     }
-    if (session.encryptionPrivateKey) {
-      console.log(`   🔑 X25519 Private: ${session.encryptionPrivateKey.substring(0, 16)}... (for browser decryption)`);
+    
+    // NEW: Store pre-decrypted message history
+    if (messageSync && messageSync.conversations) {
+      session.messageSync = {
+        conversations: messageSync.conversations,
+        totalMessages: messageSync.conversations.reduce(
+          (sum: number, c: ConversationSync) => sum + c.messages.length, 
+          0
+        ),
+        syncedAt: Date.now(),
+      };
+      console.log(`📨 Stored ${session.messageSync.totalMessages} pre-decrypted messages`);
     }
-
-    // Store browser session in database for future validation
+    
+    // Store browser session in database
     await db.createBrowserSession({
       sessionToken,
       publicKey: publicKey.toLowerCase(),
@@ -305,9 +323,13 @@ router.post('/approve', async (req: Request, res: Response) => {
       createdAt: new Date(),
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
     });
-
+    
+    console.log(`✅ Auth session approved: ${sessionId.substring(0, 8)}... by @${session.handle || publicKey.substring(0, 8)}`);
+    if (session.messageSync) {
+      console.log(`   📨 With ${session.messageSync.totalMessages} synced messages`);
+    }
+    
     // Notify browser via WebSocket if connected
-    // (Browser might be polling, but WebSocket is faster)
     const browserWs = connectedClients.get(`session:${sessionId}`);
     if (browserWs) {
       browserWs.forEach(ws => {
@@ -316,13 +338,14 @@ router.post('/approve', async (req: Request, res: Response) => {
           sessionId,
           publicKey: session.publicKey,
           handle: session.handle,
-          encryptionKey: session.encryptionKey,
-          encryptionPrivateKey: session.encryptionPrivateKey,  // ✅ NEW
           sessionToken,
+          sessionEncryptionKey: session.sessionEncryptionKey,
+          sessionEncryptionPrivateKey: session.sessionEncryptionPrivateKey,
+          messageSync: session.messageSync,
         }));
       });
     }
-
+    
     return res.json({
       success: true,
       message: 'Browser session approved',
@@ -330,11 +353,12 @@ router.post('/approve', async (req: Request, res: Response) => {
         sessionId,
         browserInfo: session.browserInfo,
         approvedAt: session.approvedAt,
+        messagesSynced: session.messageSync?.totalMessages || 0,
       },
     } as ApiResponse);
-
+    
   } catch (error) {
-    console.error('POST /auth/session/approve error:', error);
+    console.error('POST /auth/sessions/approve error:', error);
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -343,23 +367,21 @@ router.post('/approve', async (req: Request, res: Response) => {
 });
 
 // ===========================================
-// POST /auth/session/reject
-// Mobile rejects a browser session
+// POST /auth/sessions/reject
 // ===========================================
 router.post('/reject', async (req: Request, res: Response) => {
   try {
     const { sessionId, publicKey, signature } = req.body;
-
+    
     const session = pendingSessions.get(sessionId);
-
+    
     if (!session) {
       return res.status(404).json({
         success: false,
         error: 'Session not found',
       } as ApiResponse);
     }
-
-    // Verify ownership (signature optional for rejection)
+    
     if (publicKey && signature) {
       const signedData = {
         action: 'reject',
@@ -367,7 +389,7 @@ router.post('/reject', async (req: Request, res: Response) => {
         publicKey: publicKey.toLowerCase(),
         sessionId,
       };
-
+      
       const isValid = verifySignature(publicKey, canonicalJson(signedData), signature);
       if (!isValid) {
         return res.status(401).json({
@@ -376,18 +398,18 @@ router.post('/reject', async (req: Request, res: Response) => {
         } as ApiResponse);
       }
     }
-
+    
     session.status = 'rejected';
-
+    
     console.log(`❌ Auth session rejected: ${sessionId.substring(0, 8)}...`);
-
+    
     return res.json({
       success: true,
       message: 'Session rejected',
     } as ApiResponse);
-
+    
   } catch (error) {
-    console.error('POST /auth/session/reject error:', error);
+    console.error('POST /auth/sessions/reject error:', error);
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -396,22 +418,22 @@ router.post('/reject', async (req: Request, res: Response) => {
 });
 
 // ===========================================
-// DELETE /auth/session/:token
-// Browser logs out / revokes session
+// DELETE /auth/sessions/:token
+// Browser logs out
 // ===========================================
 router.delete('/:token', async (req: Request, res: Response) => {
   try {
     const sessionToken = req.params.token;
-
+    
     await db.revokeBrowserSession(sessionToken);
-
+    
     return res.json({
       success: true,
       message: 'Session revoked',
     } as ApiResponse);
-
+    
   } catch (error) {
-    console.error('DELETE /auth/session/:token error:', error);
+    console.error('DELETE /auth/sessions/:token error:', error);
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -420,33 +442,32 @@ router.delete('/:token', async (req: Request, res: Response) => {
 });
 
 // ===========================================
-// GET /auth/sessions
-// Mobile: List active browser sessions
+// GET /auth/sessions (list active sessions)
 // ===========================================
 router.get('/', async (req: Request, res: Response) => {
   try {
     const publicKey = req.headers['x-gns-publickey'] as string;
-
+    
     if (!publicKey || !isValidPublicKey(publicKey)) {
       return res.status(401).json({
         success: false,
         error: 'Missing or invalid X-GNS-PublicKey header',
       } as ApiResponse);
     }
-
+    
     const sessions = await db.getBrowserSessions(publicKey);
-
+    
     return res.json({
       success: true,
       data: sessions.map(s => ({
-        sessionToken: s.sessionToken.substring(0, 8) + '...', // Partial for security
+        sessionToken: s.sessionToken.substring(0, 8) + '...',
         browserInfo: s.browserInfo,
         createdAt: s.createdAt,
         lastUsedAt: s.lastUsedAt,
         isActive: s.isActive,
       })),
     } as ApiResponse);
-
+    
   } catch (error) {
     console.error('GET /auth/sessions error:', error);
     return res.status(500).json({
@@ -458,32 +479,28 @@ router.get('/', async (req: Request, res: Response) => {
 
 // ===========================================
 // POST /auth/sessions/revoke-all
-// Mobile: Revoke all browser sessions
 // ===========================================
 router.post('/revoke-all', async (req: Request, res: Response) => {
   try {
     const publicKey = req.headers['x-gns-publickey'] as string;
-    const signature = req.headers['x-gns-signature'] as string;
-
+    
     if (!publicKey || !isValidPublicKey(publicKey)) {
       return res.status(401).json({
         success: false,
         error: 'Missing or invalid public key',
       } as ApiResponse);
     }
-
-    // TODO: Verify signature for this sensitive operation
-
+    
     const count = await db.revokeAllBrowserSessions(publicKey);
-
+    
     console.log(`🔒 Revoked ${count} browser sessions for ${publicKey.substring(0, 8)}...`);
-
+    
     return res.json({
       success: true,
       message: `Revoked ${count} browser session(s)`,
       data: { revokedCount: count },
     } as ApiResponse);
-
+    
   } catch (error) {
     console.error('POST /auth/sessions/revoke-all error:', error);
     return res.status(500).json({
@@ -495,7 +512,6 @@ router.post('/revoke-all', async (req: Request, res: Response) => {
 
 // ===========================================
 // MIDDLEWARE: Verify Browser Session
-// Use this to protect browser-specific endpoints
 // ===========================================
 export async function verifyBrowserSession(
   req: Request,
@@ -504,39 +520,36 @@ export async function verifyBrowserSession(
 ) {
   try {
     const sessionToken = req.headers['x-gns-session'] as string;
-
+    
     if (!sessionToken) {
       return res.status(401).json({
         success: false,
         error: 'Missing X-GNS-Session header',
       } as ApiResponse);
     }
-
+    
     const session = await db.getBrowserSession(sessionToken);
-
-    if (!session || session.status !== 'approved') {
+    
+    if (!session || !session.isActive) {
       return res.status(401).json({
         success: false,
         error: 'Invalid or expired session',
       } as ApiResponse);
     }
-
-    // Check expiry
-    if (new Date() > new Date(session.expires_at)) {
+    
+    if (new Date() > session.expiresAt) {
       await db.revokeBrowserSession(sessionToken);
       return res.status(401).json({
         success: false,
         error: 'Session expired',
       } as ApiResponse);
     }
-
-    // Update last used
+    
     await db.updateBrowserSessionLastUsed(sessionToken);
-
-    // Attach to request
+    
     (req as any).browserSession = session;
-    (req as any).gnsPublicKey = session.public_key;
-
+    (req as any).gnsPublicKey = session.publicKey;
+    
     next();
   } catch (error) {
     console.error('Session verification error:', error);
