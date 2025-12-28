@@ -1,9 +1,10 @@
 // ===========================================
-// GNS NODE - MESSAGES API (DUAL ENCRYPTION)
+// GNS NODE - MESSAGES API (PHASE C - BIDIRECTIONAL SYNC)
 // 
-// Supports DUAL encrypted messages:
-// - One copy for recipient (they decrypt)
-// - One copy for sender (we decrypt our sent messages)
+// Enhanced WebSocket with device-type routing:
+// - Mobile connections: device=mobile (decrypts messages)
+// - Browser connections: device=browser (display only)
+// - Real-time sync between devices
 // 
 // Endpoints:
 // - POST /messages/send (session auth) - Send dual-encrypted message
@@ -94,11 +95,107 @@ const verifyGnsAuth = async (
 };
 
 // ===========================================
-// WEBSOCKET STATE
+// PHASE C: ENHANCED WEBSOCKET STATE
 // ===========================================
 
+// Connection with device metadata
+interface GnsConnection {
+  ws: WebSocket;
+  publicKey: string;
+  deviceType: 'mobile' | 'browser' | 'unknown';
+  sessionToken?: string;
+  connectedAt: Date;
+  isAlive: boolean;
+}
+
+// Map: publicKey -> array of connections (can have multiple devices)
+const connections = new Map<string, GnsConnection[]>();
+
+// Legacy export for backward compatibility
 const connectedClients = new Map<string, Set<WebSocket>>();
 export { connectedClients };
+
+// ===========================================
+// PHASE C: CONNECTION HELPERS
+// ===========================================
+
+function addConnection(publicKey: string, conn: GnsConnection) {
+  const pk = publicKey.toLowerCase();
+  
+  // Add to new structure
+  const existing = connections.get(pk) || [];
+  existing.push(conn);
+  connections.set(pk, existing);
+  
+  // Also maintain legacy structure
+  if (!connectedClients.has(pk)) {
+    connectedClients.set(pk, new Set());
+  }
+  connectedClients.get(pk)!.add(conn.ws);
+}
+
+function removeConnection(publicKey: string, ws: WebSocket) {
+  const pk = publicKey.toLowerCase();
+  
+  // Remove from new structure
+  const existing = connections.get(pk) || [];
+  const filtered = existing.filter(c => c.ws !== ws);
+  if (filtered.length > 0) {
+    connections.set(pk, filtered);
+  } else {
+    connections.delete(pk);
+  }
+  
+  // Remove from legacy structure
+  const clients = connectedClients.get(pk);
+  if (clients) {
+    clients.delete(ws);
+    if (clients.size === 0) {
+      connectedClients.delete(pk);
+    }
+  }
+}
+
+function getConnections(publicKey: string): GnsConnection[] {
+  return connections.get(publicKey.toLowerCase()) || [];
+}
+
+function getMobileConnections(publicKey: string): GnsConnection[] {
+  return getConnections(publicKey).filter(c => c.deviceType === 'mobile');
+}
+
+function getBrowserConnections(publicKey: string): GnsConnection[] {
+  return getConnections(publicKey).filter(c => c.deviceType === 'browser');
+}
+
+function getConnectionStatus(publicKey: string): { mobile: boolean; browsers: number } {
+  const conns = getConnections(publicKey);
+  return {
+    mobile: conns.some(c => c.deviceType === 'mobile'),
+    browsers: conns.filter(c => c.deviceType === 'browser').length,
+  };
+}
+
+function sendToConnection(conn: GnsConnection, message: any) {
+  if (conn.ws.readyState === WebSocket.OPEN) {
+    conn.ws.send(JSON.stringify(message));
+  }
+}
+
+function broadcastToUser(publicKey: string, message: any) {
+  const conns = getConnections(publicKey);
+  for (const conn of conns) {
+    sendToConnection(conn, message);
+  }
+}
+
+function broadcastConnectionStatus(publicKey: string) {
+  const status = getConnectionStatus(publicKey);
+  broadcastToUser(publicKey, {
+    type: 'connection_status',
+    data: status,
+  });
+}
 
 // ===========================================
 // GET /messages - Fetch pending messages (for MOBILE)
@@ -213,8 +310,24 @@ router.post('/send', verifySessionAuth, async (req: AuthenticatedRequest, res: R
       envelope: envelope,
     });
 
-    // Note: Echo bot will pick up messages through its polling mechanism
-
+    // ===========================================
+    // PHASE C: Notify sender's OTHER devices
+    // ===========================================
+    
+    // If sent from browser, notify mobile to decrypt & store
+    const senderMobiles = getMobileConnections(senderPk);
+    if (senderMobiles.length > 0) {
+      console.log(`   📱 Notifying ${senderMobiles.length} mobile device(s) to sync`);
+      for (const mobile of senderMobiles) {
+        sendToConnection(mobile, {
+          type: 'new_message_from_browser',
+          messageId: message.id,
+          conversationWith: toPk,
+          envelope: envelope,
+          timestamp: Date.now(),
+        });
+      }
+    }
 
     return res.status(201).json({
       success: true,
@@ -634,7 +747,7 @@ export function notifyRecipients(publicKeys: string[], message: any) {
 }
 
 // ===========================================
-// WEBSOCKET SETUP
+// PHASE C: WEBSOCKET SETUP WITH DEVICE ROUTING
 // ===========================================
 
 export function setupWebSocket(server: Server): WebSocketServer {
@@ -645,91 +758,206 @@ export function setupWebSocket(server: Server): WebSocketServer {
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url || '', `http://${req.headers.host}`);
-    const publicKey = url.searchParams.get('pubkey')?.toLowerCase();
+    
+    // Support both 'pubkey' (legacy) and 'pk' (new) parameters
+    const publicKey = (url.searchParams.get('pk') || url.searchParams.get('pubkey'))?.toLowerCase();
+    const deviceType = (url.searchParams.get('device') as 'mobile' | 'browser') || 'unknown';
+    const sessionToken = url.searchParams.get('session') || undefined;
 
     if (!publicKey || !isValidPublicKey(publicKey)) {
       ws.close(4001, 'Missing or invalid public key');
       return;
     }
 
-    if (!connectedClients.has(publicKey)) {
-      connectedClients.set(publicKey, new Set());
-    }
-    connectedClients.get(publicKey)!.add(ws);
+    // Create connection object
+    const conn: GnsConnection = {
+      ws,
+      publicKey,
+      deviceType,
+      sessionToken,
+      connectedAt: new Date(),
+      isAlive: true,
+    };
 
-    console.log(`WebSocket connected: ${publicKey.substring(0, 16)}...`);
+    // Add to connection tracking
+    addConnection(publicKey, conn);
 
+    const deviceLabel = deviceType.toUpperCase();
+    console.log(`🔌 ${deviceLabel} WebSocket connected: ${publicKey.substring(0, 16)}...`);
+    console.log(`   Total connections for user: ${getConnections(publicKey).length}`);
+
+    // Update presence
     db.updatePresence(publicKey, 'online').catch(console.error);
 
+    // Send welcome with connection status
+    sendToConnection(conn, {
+      type: 'welcome',
+      publicKey,
+      deviceType,
+      connectedDevices: getConnectionStatus(publicKey),
+      timestamp: Date.now(),
+    });
+
+    // Notify other devices of new connection
+    broadcastConnectionStatus(publicKey);
+
+    // Handle messages
     ws.on('message', async (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
-        await handleWebSocketMessage(ws, publicKey, message);
+        await handleWebSocketMessage(conn, message);
       } catch (error) {
         console.error('WebSocket message error:', error);
       }
     });
 
+    // Handle disconnect
     ws.on('close', () => {
-      const clients = connectedClients.get(publicKey);
-      if (clients) {
-        clients.delete(ws);
-        if (clients.size === 0) {
-          connectedClients.delete(publicKey);
-          db.updatePresence(publicKey, 'offline').catch(console.error);
-        }
+      removeConnection(publicKey, ws);
+      console.log(`🔌 ${deviceLabel} WebSocket disconnected: ${publicKey.substring(0, 16)}...`);
+      
+      // Update presence if no more connections
+      if (getConnections(publicKey).length === 0) {
+        db.updatePresence(publicKey, 'offline').catch(console.error);
       }
-      console.log(`WebSocket disconnected: ${publicKey.substring(0, 16)}...`);
+      
+      // Notify other devices
+      broadcastConnectionStatus(publicKey);
     });
 
     ws.on('error', (error) => {
       console.error(`WebSocket error for ${publicKey.substring(0, 16)}...:`, error);
     });
 
-    ws.send(JSON.stringify({
-      type: 'connected',
-      publicKey,
-      timestamp: Date.now(),
-    }));
-  });
-
-  // Heartbeat
-  const heartbeatInterval = setInterval(() => {
-    wss.clients.forEach((ws: WebSocket & { isAlive?: boolean }) => {
-      if (ws.isAlive === false) {
-        return ws.terminate();
-      }
-      ws.isAlive = false;
-      ws.ping();
-    });
-  }, 30000);
-
-  wss.on('connection', (ws: WebSocket & { isAlive?: boolean }) => {
-    ws.isAlive = true;
+    // Handle pong for heartbeat
     ws.on('pong', () => {
-      ws.isAlive = true;
+      conn.isAlive = true;
     });
   });
+
+  // Heartbeat interval
+  const heartbeatInterval = setInterval(() => {
+    for (const [pk, conns] of connections.entries()) {
+      for (const conn of conns) {
+        if (!conn.isAlive) {
+          console.log(`💀 Terminating stale connection: ${pk.substring(0, 16)}...`);
+          conn.ws.terminate();
+          continue;
+        }
+        conn.isAlive = false;
+        if (conn.ws.readyState === WebSocket.OPEN) {
+          conn.ws.ping();
+        }
+      }
+    }
+  }, 30000);
 
   wss.on('close', () => {
     clearInterval(heartbeatInterval);
   });
 
-  console.log('WebSocket server initialized on /ws');
+  console.log('✅ WebSocket server initialized on /ws (Phase C: device routing enabled)');
   return wss;
 }
 
-async function handleWebSocketMessage(
-  ws: WebSocket,
-  publicKey: string,
-  message: any
-) {
+// ===========================================
+// PHASE C: ENHANCED MESSAGE HANDLING
+// ===========================================
+
+async function handleWebSocketMessage(conn: GnsConnection, message: any) {
+  const { publicKey, deviceType } = conn;
+  
   switch (message.type) {
     case 'ping':
-      ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+      sendToConnection(conn, { type: 'pong', timestamp: Date.now() });
       break;
 
-    case 'message':
+    // ===========================================
+    // PHASE C: Browser wants to sync message to mobile
+    // ===========================================
+    case 'sync_to_mobile': {
+      console.log(`📤 Browser requesting sync to mobile: ${message.messageId}`);
+      
+      const mobileConns = getMobileConnections(publicKey);
+      
+      if (mobileConns.length === 0) {
+        console.log('   ⚠️ No mobile connected');
+        sendToConnection(conn, {
+          type: 'sync_pending',
+          reason: 'mobile_offline',
+          messageId: message.messageId,
+        });
+        return;
+      }
+      
+      // Forward to mobile(s)
+      for (const mobile of mobileConns) {
+        sendToConnection(mobile, {
+          type: 'new_message_from_browser',
+          messageId: message.messageId,
+          conversationWith: message.conversationWith,
+          envelope: message.envelope,
+          timestamp: message.timestamp,
+        });
+      }
+      
+      console.log(`   ✅ Sent to ${mobileConns.length} mobile device(s)`);
+      break;
+    }
+
+    // ===========================================
+    // PHASE C: Mobile syncing decrypted message to browser
+    // ===========================================
+    case 'sync_to_browser': {
+      console.log(`📤 Mobile syncing to browser: ${message.messageId}`);
+      
+      const browserConns = getBrowserConnections(publicKey);
+      
+      if (browserConns.length === 0) {
+        console.log('   ⚠️ No browsers connected');
+        return;
+      }
+      
+      // Forward pre-decrypted message to browser(s)
+      for (const browser of browserConns) {
+        sendToConnection(browser, {
+          type: 'message_synced',
+          messageId: message.messageId,
+          conversationWith: message.conversationWith,
+          decryptedText: message.decryptedText,  // Already decrypted by mobile!
+          direction: message.direction,
+          timestamp: message.timestamp,
+          fromHandle: message.fromHandle,
+        });
+      }
+      
+      console.log(`   ✅ Synced to ${browserConns.length} browser(s)`);
+      break;
+    }
+
+    // ===========================================
+    // PHASE C: Browser requesting sync from mobile
+    // ===========================================
+    case 'request_sync': {
+      console.log(`🔄 Browser requesting sync`);
+      
+      const mobileConns = getMobileConnections(publicKey);
+      
+      for (const mobile of mobileConns) {
+        sendToConnection(mobile, {
+          type: 'sync_request',
+          fromDevice: 'browser',
+          conversationWith: message.conversationWith,
+          limit: message.limit || 50,
+        });
+      }
+      break;
+    }
+
+    // ===========================================
+    // Legacy: Send message via WebSocket
+    // ===========================================
+    case 'message': {
       const envelope = message.envelope;
       if (!envelope) break;
 
@@ -751,12 +979,74 @@ async function handleWebSocketMessage(
         type: 'message',
         envelope: envelope,
       });
+      
+      // PHASE C: Also notify sender's other devices
+      if (deviceType === 'browser') {
+        const mobileConns = getMobileConnections(publicKey);
+        for (const mobile of mobileConns) {
+          sendToConnection(mobile, {
+            type: 'new_message_from_browser',
+            messageId: envelope.id,
+            conversationWith: recipients[0]?.toLowerCase(),
+            envelope: envelope,
+            timestamp: Date.now(),
+          });
+        }
+      }
       break;
+    }
 
+    // ===========================================
+    // Typing indicator
+    // ===========================================
     case 'typing':
       await db.updateTypingStatus(message.threadId, publicKey, message.isTyping);
       break;
+
+    default:
+      console.log(`Unknown WS message type: ${message.type}`);
   }
+}
+
+// ===========================================
+// PHASE C: EXPORT HELPERS FOR OTHER MODULES
+// ===========================================
+
+export function notifyUserDevices(publicKey: string, message: any) {
+  broadcastToUser(publicKey, message);
+}
+
+export function notifyMobileDevices(publicKey: string, message: any) {
+  const mobiles = getMobileConnections(publicKey);
+  for (const mobile of mobiles) {
+    sendToConnection(mobile, message);
+  }
+}
+
+export function notifyBrowserDevices(publicKey: string, message: any) {
+  const browsers = getBrowserConnections(publicKey);
+  for (const browser of browsers) {
+    sendToConnection(browser, message);
+  }
+}
+
+export function getWebSocketStats() {
+  let totalConnections = 0;
+  let mobileConnections = 0;
+  let browserConnections = 0;
+
+  for (const conns of connections.values()) {
+    totalConnections += conns.length;
+    mobileConnections += conns.filter(c => c.deviceType === 'mobile').length;
+    browserConnections += conns.filter(c => c.deviceType === 'browser').length;
+  }
+
+  return {
+    uniqueUsers: connections.size,
+    totalConnections,
+    mobileConnections,
+    browserConnections,
+  };
 }
 
 export default router;
