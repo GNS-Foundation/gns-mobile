@@ -904,6 +904,7 @@ export async function getAllUserMessages(
     .from('messages')
     .select('*')
     .or(`from_pk.eq.${userPkLower},to_pk.eq.${userPkLower}`)
+    .neq('status', 'delivered')  // ✅ FIX: Exclude delivered messages to prevent polling loop
     .order('created_at', { ascending: false })
     .limit(limit);
 
