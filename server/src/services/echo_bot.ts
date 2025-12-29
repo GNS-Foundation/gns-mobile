@@ -11,6 +11,7 @@ import { encodeBase64, decodeBase64 } from 'tweetnacl-util';
 import sodium from 'libsodium-wrappers';
 import * as db from '../lib/db';
 import { hexToBytes, bytesToHex } from '../lib/crypto';
+import { broadcastToUser } from '../api/messages';
 
 // ===========================================
 // @echo Bot Configuration
@@ -561,7 +562,6 @@ async function processIncomingMessages(): Promise<void> {
 
         // ✅ NEW: Notify mobile via WebSocket
         try {
-          const { broadcastToUser } = await import('../api/messages');
           broadcastToUser(msg.from_pk, {
             type: 'new_message',
             data: {
