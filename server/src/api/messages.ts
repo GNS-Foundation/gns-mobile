@@ -121,12 +121,12 @@ export { connectedClients };
 
 function addConnection(publicKey: string, conn: GnsConnection) {
   const pk = publicKey.toLowerCase();
-  
+
   // Add to new structure
   const existing = connections.get(pk) || [];
   existing.push(conn);
   connections.set(pk, existing);
-  
+
   // Also maintain legacy structure
   if (!connectedClients.has(pk)) {
     connectedClients.set(pk, new Set());
@@ -136,7 +136,7 @@ function addConnection(publicKey: string, conn: GnsConnection) {
 
 function removeConnection(publicKey: string, ws: WebSocket) {
   const pk = publicKey.toLowerCase();
-  
+
   // Remove from new structure
   const existing = connections.get(pk) || [];
   const filtered = existing.filter(c => c.ws !== ws);
@@ -145,7 +145,7 @@ function removeConnection(publicKey: string, ws: WebSocket) {
   } else {
     connections.delete(pk);
   }
-  
+
   // Remove from legacy structure
   const clients = connectedClients.get(pk);
   if (clients) {
@@ -313,7 +313,7 @@ router.post('/send', verifySessionAuth, async (req: AuthenticatedRequest, res: R
     // ===========================================
     // PHASE C: Notify sender's OTHER devices
     // ===========================================
-    
+
     // If sent from browser, notify mobile to decrypt & store
     const senderMobiles = getMobileConnections(senderPk);
     if (senderMobiles.length > 0) {
@@ -758,7 +758,7 @@ export function setupWebSocket(server: Server): WebSocketServer {
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url || '', `http://${req.headers.host}`);
-    
+
     // Support both 'pubkey' (legacy) and 'pk' (new) parameters
     const publicKey = (url.searchParams.get('pk') || url.searchParams.get('pubkey'))?.toLowerCase();
     const deviceType = (url.searchParams.get('device') as 'mobile' | 'browser') || 'unknown';
@@ -815,12 +815,12 @@ export function setupWebSocket(server: Server): WebSocketServer {
     ws.on('close', () => {
       removeConnection(publicKey, ws);
       console.log(`🔌 ${deviceLabel} WebSocket disconnected: ${publicKey.substring(0, 16)}...`);
-      
+
       // Update presence if no more connections
       if (getConnections(publicKey).length === 0) {
         db.updatePresence(publicKey, 'offline').catch(console.error);
       }
-      
+
       // Notify other devices
       broadcastConnectionStatus(publicKey);
     });
@@ -866,7 +866,7 @@ export function setupWebSocket(server: Server): WebSocketServer {
 
 async function handleWebSocketMessage(conn: GnsConnection, message: any) {
   const { publicKey, deviceType } = conn;
-  
+
   switch (message.type) {
     case 'ping':
       sendToConnection(conn, { type: 'pong', timestamp: Date.now() });
@@ -877,9 +877,9 @@ async function handleWebSocketMessage(conn: GnsConnection, message: any) {
     // ===========================================
     case 'sync_to_mobile': {
       console.log(`📤 Browser requesting sync to mobile: ${message.messageId}`);
-      
+
       const mobileConns = getMobileConnections(publicKey);
-      
+
       if (mobileConns.length === 0) {
         console.log('   ⚠️ No mobile connected');
         sendToConnection(conn, {
@@ -889,18 +889,18 @@ async function handleWebSocketMessage(conn: GnsConnection, message: any) {
         });
         return;
       }
-      
+
       // Forward to mobile(s)
       for (const mobile of mobileConns) {
         sendToConnection(mobile, {
           type: 'new_message_from_browser',
           messageId: message.messageId,
           conversationWith: message.conversationWith,
-          envelope: message.envelope,
+          decryptedText: message.decryptedText,  // ← Forward plaintext!
           timestamp: message.timestamp,
         });
       }
-      
+
       console.log(`   ✅ Sent to ${mobileConns.length} mobile device(s)`);
       break;
     }
@@ -910,14 +910,14 @@ async function handleWebSocketMessage(conn: GnsConnection, message: any) {
     // ===========================================
     case 'sync_to_browser': {
       console.log(`📤 Mobile syncing to browser: ${message.messageId}`);
-      
+
       const browserConns = getBrowserConnections(publicKey);
-      
+
       if (browserConns.length === 0) {
         console.log('   ⚠️ No browsers connected');
         return;
       }
-      
+
       // Forward pre-decrypted message to browser(s)
       for (const browser of browserConns) {
         sendToConnection(browser, {
@@ -930,7 +930,7 @@ async function handleWebSocketMessage(conn: GnsConnection, message: any) {
           fromHandle: message.fromHandle,
         });
       }
-      
+
       console.log(`   ✅ Synced to ${browserConns.length} browser(s)`);
       break;
     }
@@ -940,9 +940,9 @@ async function handleWebSocketMessage(conn: GnsConnection, message: any) {
     // ===========================================
     case 'request_sync': {
       console.log(`🔄 Browser requesting sync`);
-      
+
       const mobileConns = getMobileConnections(publicKey);
-      
+
       for (const mobile of mobileConns) {
         sendToConnection(mobile, {
           type: 'sync_request',
@@ -979,7 +979,7 @@ async function handleWebSocketMessage(conn: GnsConnection, message: any) {
         type: 'message',
         envelope: envelope,
       });
-      
+
       // PHASE C: Also notify sender's other devices
       if (deviceType === 'browser') {
         const mobileConns = getMobileConnections(publicKey);
