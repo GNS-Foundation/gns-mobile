@@ -182,7 +182,7 @@ function sendToConnection(conn: GnsConnection, message: any) {
   }
 }
 
-function broadcastToUser(publicKey: string, message: any) {
+export function broadcastToUser(publicKey: string, message: any) {
   const conns = getConnections(publicKey);
   for (const conn of conns) {
     sendToConnection(conn, message);
