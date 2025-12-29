@@ -559,6 +559,22 @@ async function processIncomingMessages(): Promise<void> {
 
         console.log(`   ✅ Echo response sent to ${msg.from_pk.substring(0, 16)}...`);
 
+        // ✅ NEW: Notify mobile via WebSocket
+        try {
+          const { broadcastToUser } = await import('../api/messages');
+          broadcastToUser(msg.from_pk, {
+            type: 'new_message',
+            data: {
+              id: response.envelope.id,
+              from: response.envelope.fromPublicKey,
+              timestamp: response.envelope.timestamp,
+            },
+          });
+          console.log(`   📱 Notified mobile of echo response via WebSocket`);
+        } catch (wsError) {
+          console.warn(`   ⚠️ Failed to notify via WebSocket (non-fatal):`, wsError);
+        }
+
         // Mark original message as delivered
         await db.markMessageDelivered(msg.id);
 
