@@ -3,6 +3,8 @@
 // Uses direct X25519 keys (no Ed25519→X25519 conversion)
 // Ed25519: Identity and signatures only
 // X25519: Encryption only (fetched from database)
+// 
+// ✅ FIXED: Handles BOTH snake_case (Tauri/Rust) and camelCase (Flutter) field names
 // ===========================================
 
 import * as crypto from 'crypto';
@@ -330,6 +332,55 @@ function decryptFromSender(
 }
 
 /**
+ * Decrypt with ChaCha20-Poly1305 (Tauri/Rust format - HEX encoded)
+ * 🚨 CRITICAL: Tauri sends HEX, not Base64!
+ */
+function decryptFromSenderHex(
+  ciphertextHex: string,
+  ephemeralPublicKeyHex: string,
+  nonceHex: string
+): Buffer | null {
+  try {
+    const encrypted = Buffer.from(ciphertextHex, 'hex');
+    const ephemeralPub = Buffer.from(ephemeralPublicKeyHex, 'hex');
+    const nonce = Buffer.from(nonceHex, 'hex');
+
+    // 1. Check for the SEPARATE X25519 private key
+    if (!echoX25519PrivateKey) {
+      throw new Error('Echo X25519 private key not initialized for decryption');
+    }
+
+    // 2. Derive shared secret using the correct private key
+    const sharedSecret = x25519SharedSecret(
+      echoX25519PrivateKey, // 🔑 Bot's X25519 Private Key
+      ephemeralPub
+    );
+
+    // 3. Derive decryption key with HKDF
+    const decryptionKey = deriveKey(sharedSecret, HKDF_INFO_ENVELOPE);
+
+    // 4. Decrypt payload
+    const ciphertext = encrypted.slice(0, encrypted.length - MAC_LENGTH);
+    const authTag = encrypted.slice(encrypted.length - MAC_LENGTH);
+
+    const decipher = crypto.createDecipheriv('chacha20-poly1305', decryptionKey, nonce, {
+      authTagLength: MAC_LENGTH,
+    });
+    decipher.setAuthTag(authTag);
+
+    const decrypted = Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final(),
+    ]);
+
+    return decrypted;
+  } catch (error) {
+    console.error('   ⚠️ Decryption error (HEX format):', error);
+    return null;
+  }
+}
+
+/**
  * Encrypt for recipient using ChaCha20-Poly1305
  */
 function encryptForRecipient(
@@ -471,6 +522,7 @@ async function createEchoResponse(
 
 /**
  * Process incoming messages and send echo responses
+ * ✅ FIXED: Handles BOTH snake_case (Tauri/Rust) and camelCase (Flutter) field names
  */
 async function processIncomingMessages(): Promise<void> {
   if (!ECHO_CONFIG.enabled) return;
@@ -502,30 +554,62 @@ async function processIncomingMessages(): Promise<void> {
           continue;
         }
 
-        // Handle nested encryptedPayload structure from Tauri/Rust
-        let encPayload = envelope.encryptedPayload;
-        let ephKey = envelope.ephemeralPublicKey;
+        // =====================================================
+        // ✅ FIXED: Handle BOTH snake_case and camelCase field names
+        // Tauri/Rust sends: encrypted_payload, ephemeral_public_key, from_public_key
+        // Flutter sends: encryptedPayload, ephemeralPublicKey, fromPublicKey
+        // =====================================================
+        
+        // Try camelCase first (Flutter), then snake_case (Tauri)
+        let encPayload = envelope.encryptedPayload || envelope.encrypted_payload;
+        let ephKey = envelope.ephemeralPublicKey || envelope.ephemeral_public_key;
         let nonceVal = envelope.nonce;
+        let payloadType = envelope.payloadType || envelope.payload_type || 'gns/text.plain';
+        let fromPk = envelope.fromPublicKey || envelope.from_public_key || msg.from_pk;
 
-        // If encryptedPayload is an object (Rust format), extract inner fields
+        // Debug: Log what format we received
+        console.log(`   📩 Message ${msg.id.substring(0, 8)}... format check:`);
+        console.log(`      encryptedPayload (camel): ${envelope.encryptedPayload ? 'YES' : 'NO'}`);
+        console.log(`      encrypted_payload (snake): ${envelope.encrypted_payload ? 'YES' : 'NO'}`);
+        console.log(`      ephemeralPublicKey (camel): ${envelope.ephemeralPublicKey ? 'YES' : 'NO'}`);
+        console.log(`      ephemeral_public_key (snake): ${envelope.ephemeral_public_key ? 'YES' : 'NO'}`);
+
+        // If encryptedPayload is an object (Rust nested format), extract inner fields
         if (typeof encPayload === 'object' && encPayload !== null) {
-          ephKey = encPayload.ephemeralPublicKey;
-          nonceVal = encPayload.nonce;
+          console.log(`      Detected nested encrypted_payload object (Tauri format)`);
+          // Tauri sends: { ciphertext, ephemeral_public_key, nonce }
+          ephKey = encPayload.ephemeral_public_key || encPayload.ephemeralPublicKey || ephKey;
+          nonceVal = encPayload.nonce || nonceVal;
           encPayload = encPayload.ciphertext;
         }
 
         if (!encPayload || !ephKey || !nonceVal) {
           console.warn(`   ⚠️ Message ${msg.id} missing encryption fields, skipping`);
-          console.warn(`   encPayload: ${typeof encPayload}, ephKey: ${typeof ephKey}, nonce: ${typeof nonceVal}`);
+          console.warn(`      encPayload: ${typeof encPayload} = ${encPayload ? 'present' : 'MISSING'}`);
+          console.warn(`      ephKey: ${typeof ephKey} = ${ephKey ? 'present' : 'MISSING'}`);
+          console.warn(`      nonce: ${typeof nonceVal} = ${nonceVal ? 'present' : 'MISSING'}`);
           continue;
         }
 
-        // Decrypt payload using bot's X25519 private key
-        const decrypted = decryptFromSender(
-          encPayload,
-          ephKey,
-          nonceVal
-        );
+        // =====================================================
+        // ✅ FIXED: Detect encoding format (HEX vs Base64)
+        // Tauri sends HEX, Flutter sends Base64
+        // =====================================================
+        
+        let decrypted: Buffer | null = null;
+        
+        // Check if it looks like HEX (only 0-9, a-f characters)
+        const isHex = /^[0-9a-fA-F]+$/.test(encPayload);
+        
+        if (isHex && encPayload.length > 100) {
+          // Tauri/Rust format: HEX encoded
+          console.log(`      Detected HEX encoding (Tauri format)`);
+          decrypted = decryptFromSenderHex(encPayload, ephKey, nonceVal);
+        } else {
+          // Flutter format: Base64 encoded
+          console.log(`      Detected Base64 encoding (Flutter format)`);
+          decrypted = decryptFromSender(encPayload, ephKey, nonceVal);
+        }
 
         if (!decrypted) {
           console.warn(`   ⚠️ Failed to decrypt message ${msg.id}, skipping`);
@@ -540,12 +624,12 @@ async function processIncomingMessages(): Promise<void> {
           content = { type: 'unknown', text: decrypted.toString('utf8') };
         }
 
-        console.log(`   📩 Decrypted message from ${msg.from_pk.substring(0, 16)}...`);
+        console.log(`   📩 Decrypted message from ${(fromPk || msg.from_pk).substring(0, 16)}...`);
         console.log(`   Type: ${content.type}, Text: ${content.text?.substring(0, 50) || 'N/A'}`);
 
         // Skip delete messages, reactions, receipts, typing indicators, etc.
-        if (envelope.payloadType !== 'gns/text.plain') {
-          console.log(`   ⏭️  Skipping non-text message type: ${envelope.payloadType}`);
+        if (payloadType !== 'gns/text.plain' && payloadType !== 'text/plain') {
+          console.log(`   ⏭️  Skipping non-text message type: ${payloadType}`);
           await db.markMessageDelivered(msg.id);
           continue;
         }
