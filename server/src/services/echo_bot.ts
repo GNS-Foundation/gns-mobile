@@ -35,7 +35,7 @@ const ECHO_CONFIG: EchoBotConfig = {
 // Crypto Constants (match Flutter)
 // ===========================================
 
-const HKDF_INFO_ENVELOPE = 'gns-envelope-v1';
+// HKDF info now built dynamically in deriveKey() to include public keys
 const NONCE_LENGTH = 12;  // ChaCha20-Poly1305 uses 12-byte nonce
 const MAC_LENGTH = 16;    // Poly1305 MAC is 16 bytes
 const KEY_LENGTH = 32;    // ChaCha20 key is 32 bytes
@@ -269,8 +269,21 @@ function x25519SharedSecret(privateKey: Uint8Array, publicKey: Uint8Array): Buff
 
 /**
  * Derive encryption key using HKDF (SHA256)
+ * ✅ FIXED: Match Tauri/Rust format - info includes public keys
  */
-function deriveKey(sharedSecret: Buffer, info: string): Buffer {
+function deriveKey(
+  sharedSecret: Buffer, 
+  ephemeralPublicKey: Buffer,
+  recipientPublicKey: Buffer
+): Buffer {
+  // Info = "gns-envelope-v1:" + ephemeral_pub (32 bytes) + recipient_pub (32 bytes)
+  // This MUST match the Rust implementation!
+  const info = Buffer.concat([
+    Buffer.from('gns-envelope-v1:'),
+    ephemeralPublicKey,
+    recipientPublicKey
+  ]);
+
   const derivedKey = crypto.hkdfSync(
     'sha256',
     sharedSecret,
@@ -278,12 +291,13 @@ function deriveKey(sharedSecret: Buffer, info: string): Buffer {
     info,
     KEY_LENGTH
   );
-  return Buffer.from(derivedKey);  // Convert ArrayBuffer to Buffer
+  return Buffer.from(derivedKey);
 }
 
 /**
  * Decrypt with ChaCha20-Poly1305 (Flutter-compatible)
  * 🚨 CRITICAL: This function decrypts incoming messages to the bot
+ * ✅ FIXED: Use correct HKDF info with public keys
  */
 function decryptFromSender(
   encryptedPayload: string,
@@ -301,16 +315,19 @@ function decryptFromSender(
       throw new Error('Echo X25519 private key not initialized for decryption');
     }
 
-    // 2. Derive shared secret using the correct private key
+    // 2. Get bot's X25519 public key (recipient)
+    const botX25519PublicKey = Buffer.from(hexToBytes(echoX25519PublicKeyHex));
+
+    // 3. Derive shared secret using the correct private key
     const sharedSecret = x25519SharedSecret(
       echoX25519PrivateKey, // 🔑 Bot's X25519 Private Key
       ephemeralPub
     );
 
-    // 3. Derive decryption key with HKDF
-    const decryptionKey = deriveKey(sharedSecret, HKDF_INFO_ENVELOPE);
+    // 4. Derive decryption key with HKDF (including public keys in info!)
+    const decryptionKey = deriveKey(sharedSecret, ephemeralPub, botX25519PublicKey);
 
-    // 4. Decrypt payload
+    // 5. Decrypt payload
     const ciphertext = encrypted.slice(0, encrypted.length - MAC_LENGTH);
     const authTag = encrypted.slice(encrypted.length - MAC_LENGTH);
 
@@ -334,6 +351,7 @@ function decryptFromSender(
 /**
  * Decrypt with ChaCha20-Poly1305 (Tauri/Rust format - HEX encoded)
  * 🚨 CRITICAL: Tauri sends HEX, not Base64!
+ * ✅ FIXED: Use correct HKDF info with public keys
  */
 function decryptFromSenderHex(
   ciphertextHex: string,
@@ -350,16 +368,19 @@ function decryptFromSenderHex(
       throw new Error('Echo X25519 private key not initialized for decryption');
     }
 
-    // 2. Derive shared secret using the correct private key
+    // 2. Get bot's X25519 public key (recipient)
+    const botX25519PublicKey = Buffer.from(hexToBytes(echoX25519PublicKeyHex));
+
+    // 3. Derive shared secret using the correct private key
     const sharedSecret = x25519SharedSecret(
       echoX25519PrivateKey, // 🔑 Bot's X25519 Private Key
       ephemeralPub
     );
 
-    // 3. Derive decryption key with HKDF
-    const decryptionKey = deriveKey(sharedSecret, HKDF_INFO_ENVELOPE);
+    // 4. Derive decryption key with HKDF (including public keys in info!)
+    const decryptionKey = deriveKey(sharedSecret, ephemeralPub, botX25519PublicKey);
 
-    // 4. Decrypt payload
+    // 5. Decrypt payload (ciphertext includes auth tag at the end)
     const ciphertext = encrypted.slice(0, encrypted.length - MAC_LENGTH);
     const authTag = encrypted.slice(encrypted.length - MAC_LENGTH);
 
@@ -382,6 +403,7 @@ function decryptFromSenderHex(
 
 /**
  * Encrypt for recipient using ChaCha20-Poly1305
+ * ✅ FIXED: Use correct HKDF info with public keys
  */
 function encryptForRecipient(
   payload: Buffer,
@@ -397,8 +419,10 @@ function encryptForRecipient(
   // 2. Derive shared secret
   const sharedSecret = x25519SharedSecret(ephemeral.privateKey, recipientX25519PublicKey);
 
-  // 3. Derive encryption key with HKDF
-  const encryptionKey = deriveKey(sharedSecret, HKDF_INFO_ENVELOPE);
+  // 3. Derive encryption key with HKDF (including public keys in info!)
+  const ephemeralPubBuffer = Buffer.from(ephemeral.publicKey);
+  const recipientPubBuffer = Buffer.from(recipientX25519PublicKey);
+  const encryptionKey = deriveKey(sharedSecret, ephemeralPubBuffer, recipientPubBuffer);
 
   // 4. Generate random nonce
   const nonce = crypto.randomBytes(NONCE_LENGTH);
@@ -743,4 +767,3 @@ export default {
   registerHandle,
   getEchoBotStatus,
 };
-// Railway deploy trigger Fri Jan  2 13:25:37 CET 2026
