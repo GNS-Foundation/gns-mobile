@@ -502,16 +502,29 @@ async function processIncomingMessages(): Promise<void> {
           continue;
         }
 
-        if (!envelope.encryptedPayload || !envelope.ephemeralPublicKey || !envelope.nonce) {
+        // Handle nested encryptedPayload structure from Tauri/Rust
+        let encPayload = envelope.encryptedPayload;
+        let ephKey = envelope.ephemeralPublicKey;
+        let nonceVal = envelope.nonce;
+
+        // If encryptedPayload is an object (Rust format), extract inner fields
+        if (typeof encPayload === 'object' && encPayload !== null) {
+          ephKey = encPayload.ephemeralPublicKey;
+          nonceVal = encPayload.nonce;
+          encPayload = encPayload.ciphertext;
+        }
+
+        if (!encPayload || !ephKey || !nonceVal) {
           console.warn(`   ⚠️ Message ${msg.id} missing encryption fields, skipping`);
+          console.warn(`   encPayload: ${typeof encPayload}, ephKey: ${typeof ephKey}, nonce: ${typeof nonceVal}`);
           continue;
         }
 
         // Decrypt payload using bot's X25519 private key
         const decrypted = decryptFromSender(
-          envelope.encryptedPayload,
-          envelope.ephemeralPublicKey,
-          envelope.nonce
+          encPayload,
+          ephKey,
+          nonceVal
         );
 
         if (!decrypted) {
