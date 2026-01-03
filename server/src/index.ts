@@ -27,6 +27,7 @@ import emailRouter, { initializeEmailGateway } from './api/email';
 import gsiteRouter from './api/gsite';
 import orgRouter from './api/org';
 import cmsRouter from './api/cms';
+import breadcrumbsRouter from './api/breadcrumbs';
 
 // Services
 import echoBot from './services/echo_bot';
@@ -161,6 +162,7 @@ app.use('/email', emailRouter);
 app.use('/gsite', gsiteRouter);
 app.use('/org', orgRouter);
 app.use('/cms', cmsRouter);
+app.use('/breadcrumbs', breadcrumbsRouter);
 
 // ===========================================
 // Auth Challenge Endpoint

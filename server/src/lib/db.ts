@@ -7,7 +7,8 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   DbRecord, DbAlias, DbEpoch, DbMessage,
   GnsRecord, PoTProof, EpochHeader, SyncState,
-  DbPaymentIntent, DbPaymentAck, DbGeoAuthSession
+  DbPaymentIntent, DbPaymentAck, DbGeoAuthSession,
+  DbBreadcrumb
 } from '../types';
 
 // ===========================================
@@ -797,6 +798,48 @@ export async function getThreadMessages(
 
   // Return in chronological order
   return (data as DbMessage[]).reverse();
+}
+
+// ===========================================
+// BREADCRUMBS (Cloud Sync)
+// ===========================================
+
+export async function createBreadcrumb(
+  pkRoot: string,
+  payload: string,
+  signature: string
+): Promise<DbBreadcrumb> {
+  const { data, error } = await getSupabase()
+    .from('breadcrumbs')
+    .insert({
+      pk_root: pkRoot.toLowerCase(),
+      payload,
+      signature,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating breadcrumb:', error);
+    throw error;
+  }
+
+  return data as DbBreadcrumb;
+}
+
+export async function getBreadcrumbs(pkRoot: string): Promise<DbBreadcrumb[]> {
+  const { data, error } = await getSupabase()
+    .from('breadcrumbs')
+    .select('*')
+    .eq('pk_root', pkRoot.toLowerCase())
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Error fetching breadcrumbs:', error);
+    throw error;
+  }
+
+  return data as DbBreadcrumb[];
 }
 
 // ===========================================

@@ -286,3 +286,11 @@ export const RESERVED_HANDLES = [
   'admin', 'root', 'system', 'gns', 'layer',
   'browser', 'support', 'help', 'official', 'verified'
 ] as const;
+
+export interface DbBreadcrumb {
+  id: number;
+  pk_root: string;
+  payload: string;      // Encrypted JSON
+  signature: string;
+  created_at: string;
+}

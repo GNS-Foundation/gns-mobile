@@ -272,7 +272,7 @@ function x25519SharedSecret(privateKey: Uint8Array, publicKey: Uint8Array): Buff
  * ✅ FIXED: Match Tauri/Rust format - info includes public keys
  */
 function deriveKey(
-  sharedSecret: Buffer, 
+  sharedSecret: Buffer,
   ephemeralPublicKey: Buffer,
   recipientPublicKey: Buffer
 ): Buffer {
@@ -397,6 +397,9 @@ function decryptFromSenderHex(
     return decrypted;
   } catch (error) {
     console.error('   ⚠️ Decryption error (HEX format):', error);
+    console.error(`      ciphertext length: ${ciphertextHex?.length}`);
+    console.error(`      ephKey type: ${typeof ephemeralPublicKeyHex}, length: ${ephemeralPublicKeyHex?.length}, value: ${ephemeralPublicKeyHex?.substring(0, 16)}...`);
+    console.error(`      nonce length: ${nonceHex?.length}`);
     return null;
   }
 }
@@ -583,7 +586,7 @@ async function processIncomingMessages(): Promise<void> {
         // Tauri/Rust sends: encrypted_payload, ephemeral_public_key, from_public_key
         // Flutter sends: encryptedPayload, ephemeralPublicKey, fromPublicKey
         // =====================================================
-        
+
         // Try camelCase first (Flutter), then snake_case (Tauri)
         let encPayload = envelope.encryptedPayload || envelope.encrypted_payload;
         let ephKey = envelope.ephemeralPublicKey || envelope.ephemeral_public_key;
@@ -619,12 +622,12 @@ async function processIncomingMessages(): Promise<void> {
         // ✅ FIXED: Detect encoding format (HEX vs Base64)
         // Tauri sends HEX, Flutter sends Base64
         // =====================================================
-        
+
         let decrypted: Buffer | null = null;
-        
+
         // Check if it looks like HEX (only 0-9, a-f characters)
         const isHex = /^[0-9a-fA-F]+$/.test(encPayload);
-        
+
         if (isHex && encPayload.length > 100) {
           // Tauri/Rust format: HEX encoded
           console.log(`      Detected HEX encoding (Tauri format)`);
