@@ -598,12 +598,13 @@ async function processIncomingMessages(): Promise<void> {
         console.log(`   📩 Message ${msg.id.substring(0, 8)}... format check:`);
         console.log(`      encryptedPayload (camel): ${envelope.encryptedPayload ? 'YES' : 'NO'}`);
         console.log(`      encrypted_payload (snake): ${envelope.encrypted_payload ? 'YES' : 'NO'}`);
-        console.log(`      ephemeralPublicKey (camel): ${envelope.ephemeralPublicKey ? 'YES' : 'NO'}`);
-        console.log(`      ephemeral_public_key (snake): ${envelope.ephemeral_public_key ? 'YES' : 'NO'}`);
+
+        let isTauriFormat = false;
 
         // If encryptedPayload is an object (Rust nested format), extract inner fields
         if (typeof encPayload === 'object' && encPayload !== null) {
           console.log(`      Detected nested encrypted_payload object (Tauri format)`);
+          isTauriFormat = true;
           // Tauri sends: { ciphertext, ephemeral_public_key, nonce }
           ephKey = encPayload.ephemeral_public_key || encPayload.ephemeralPublicKey || ephKey;
           nonceVal = encPayload.nonce || nonceVal;
@@ -612,9 +613,6 @@ async function processIncomingMessages(): Promise<void> {
 
         if (!encPayload || !ephKey || !nonceVal) {
           console.warn(`   ⚠️ Message ${msg.id} missing encryption fields, skipping`);
-          console.warn(`      encPayload: ${typeof encPayload} = ${encPayload ? 'present' : 'MISSING'}`);
-          console.warn(`      ephKey: ${typeof ephKey} = ${ephKey ? 'present' : 'MISSING'}`);
-          console.warn(`      nonce: ${typeof nonceVal} = ${nonceVal ? 'present' : 'MISSING'}`);
           continue;
         }
 
@@ -628,7 +626,8 @@ async function processIncomingMessages(): Promise<void> {
         // Check if it looks like HEX (only 0-9, a-f characters)
         const isHex = /^[0-9a-fA-F]+$/.test(encPayload);
 
-        if (isHex && encPayload.length > 100) {
+        // Force Hex if we detected Tauri format, OR if it looks like Hex and is long enough
+        if (isTauriFormat || (isHex && encPayload.length > 100)) {
           // Tauri/Rust format: HEX encoded
           console.log(`      Detected HEX encoding (Tauri format)`);
           decrypted = decryptFromSenderHex(encPayload, ephKey, nonceVal);
