@@ -107,6 +107,10 @@ export async function upsertRecord(
     .select()
     .single();
 
+  console.log(`[db.upsertRecord] Upsert result for ${pkRoot.substring(0, 16)}...`);
+  if (error) console.error(`[db.upsertRecord] Error:`, error);
+  if (data) console.log(`[db.upsertRecord] Success. Encryption key: ${data.encryption_key}`);
+
   if (error) {
     console.error('Error upserting record:', error);
     throw error;

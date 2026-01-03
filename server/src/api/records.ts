@@ -18,7 +18,7 @@ const router = Router();
 router.get('/:pk', async (req: Request, res: Response) => {
   try {
     const pk = req.params.pk?.toLowerCase();
-    
+
     // Validate pk format
     if (!isValidPublicKey(pk)) {
       return res.status(400).json({
@@ -26,17 +26,17 @@ router.get('/:pk', async (req: Request, res: Response) => {
         error: 'Invalid public key format',
       } as ApiResponse);
     }
-    
+
     // Fetch record
     const record = await db.getRecord(pk);
-    
+
     if (!record) {
       return res.status(404).json({
         success: false,
         error: 'Record not found',
       } as ApiResponse);
     }
-    
+
     return res.json({
       success: true,
       data: {
@@ -48,7 +48,7 @@ router.get('/:pk', async (req: Request, res: Response) => {
         updated_at: record.updated_at,
       },
     } as ApiResponse<Partial<DbRecord>>);
-    
+
   } catch (error) {
     console.error('GET /records/:pk error:', error);
     return res.status(500).json({
@@ -65,7 +65,7 @@ router.get('/:pk', async (req: Request, res: Response) => {
 router.put('/:pk', async (req: Request, res: Response) => {
   try {
     const pk = req.params.pk?.toLowerCase();
-    
+
     // Validate pk in URL
     if (!isValidPublicKey(pk)) {
       return res.status(400).json({
@@ -73,14 +73,14 @@ router.put('/:pk', async (req: Request, res: Response) => {
         error: 'Invalid public key in URL',
       } as ApiResponse);
     }
-    
+
     // Validate request body
     const parseResult = signedRecordSchema.safeParse({
       pk_root: pk,
       record_json: req.body.record_json,
       signature: req.body.signature,
     });
-    
+
     if (!parseResult.success) {
       return res.status(400).json({
         success: false,
@@ -88,27 +88,27 @@ router.put('/:pk', async (req: Request, res: Response) => {
         message: parseResult.error.errors.map(e => e.message).join(', '),
       } as ApiResponse);
     }
-    
+
     const { record_json, signature } = parseResult.data;
-    
+
     // Verify signature
     const isValid = verifyGnsRecord(pk, record_json, signature);
-    
+
     if (!isValid) {
       return res.status(401).json({
         success: false,
         error: 'Invalid signature',
       } as ApiResponse);
     }
-    
+
     // Check if updating existing record
     const existing = await db.getRecord(pk);
-    
+
     if (existing) {
       // Verify update is newer
       const existingUpdated = new Date(existing.record_json.updated_at);
       const newUpdated = new Date(record_json.updated_at);
-      
+
       if (newUpdated <= existingUpdated) {
         return res.status(409).json({
           success: false,
@@ -116,12 +116,17 @@ router.put('/:pk', async (req: Request, res: Response) => {
         } as ApiResponse);
       }
     }
-    
+
     // Upsert record
+    console.log(`[PUT /records/${pk}] Upserting record...`);
+    console.log(`[PUT /records/${pk}] Payload identity: ${record_json.identity}`);
+    console.log(`[PUT /records/${pk}] Payload encryption_key: ${record_json.encryption_key}`);
+
     const saved = await db.upsertRecord(pk, record_json, signature);
-    
-    console.log(`Record ${existing ? 'updated' : 'created'}: ${pk.substring(0, 16)}...`);
-    
+
+    console.log(`[PUT /records/${pk}] Record ${existing ? 'updated' : 'created'}: ${pk.substring(0, 16)}...`);
+    console.log(`[PUT /records/${pk}] Saved encryption_key: ${saved.encryption_key}`);
+
     return res.status(existing ? 200 : 201).json({
       success: true,
       data: {
@@ -131,7 +136,7 @@ router.put('/:pk', async (req: Request, res: Response) => {
       },
       message: existing ? 'Record updated' : 'Record created',
     } as ApiResponse);
-    
+
   } catch (error) {
     console.error('PUT /records/:pk error:', error);
     return res.status(500).json({
@@ -149,7 +154,7 @@ router.delete('/:pk', async (req: Request, res: Response) => {
   try {
     const pk = req.params.pk?.toLowerCase();
     const signature = req.headers['x-gns-signature'] as string;
-    
+
     // Validate pk
     if (!isValidPublicKey(pk)) {
       return res.status(400).json({
@@ -157,7 +162,7 @@ router.delete('/:pk', async (req: Request, res: Response) => {
         error: 'Invalid public key format',
       } as ApiResponse);
     }
-    
+
     // Require signature header
     if (!signature) {
       return res.status(401).json({
@@ -165,7 +170,7 @@ router.delete('/:pk', async (req: Request, res: Response) => {
         error: 'Missing X-GNS-Signature header',
       } as ApiResponse);
     }
-    
+
     // Check record exists
     const existing = await db.getRecord(pk);
     if (!existing) {
@@ -174,7 +179,7 @@ router.delete('/:pk', async (req: Request, res: Response) => {
         error: 'Record not found',
       } as ApiResponse);
     }
-    
+
     // Verify deletion signature
     // The signed message should be: "DELETE:{pk}:{timestamp}"
     const timestamp = req.headers['x-gns-timestamp'] as string;
@@ -184,23 +189,23 @@ router.delete('/:pk', async (req: Request, res: Response) => {
         error: 'Missing X-GNS-Timestamp header',
       } as ApiResponse);
     }
-    
+
     const deleteMessage = `DELETE:${pk}:${timestamp}`;
     const isValid = verifyGnsRecord(pk, { message: deleteMessage }, signature);
-    
+
     // For now, we'll skip signature verification on delete
     // TODO: Implement proper delete verification
-    
+
     // Delete record
     await db.deleteRecord(pk);
-    
+
     console.log(`Record deleted: ${pk.substring(0, 16)}...`);
-    
+
     return res.json({
       success: true,
       message: 'Record deleted',
     } as ApiResponse);
-    
+
   } catch (error) {
     console.error('DELETE /records/:pk error:', error);
     return res.status(500).json({
