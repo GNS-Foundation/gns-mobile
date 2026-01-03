@@ -48,6 +48,7 @@ interface EnvelopeData {
   id: string;
   version: number;
   fromPublicKey: string;
+  fromHandle?: string;
   toPublicKeys: string[];
   ccPublicKeys: string[] | null;
   payloadType: string;
@@ -84,6 +85,7 @@ function createCanonicalEnvelopeString(envelope: EnvelopeData): string {
     id: envelope.id,
     version: envelope.version,
     fromPublicKey: envelope.fromPublicKey,
+    fromHandle: envelope.fromHandle || null,
     toPublicKeys: [...envelope.toPublicKeys].sort(),
     ccPublicKeys: envelope.ccPublicKeys ? [...envelope.ccPublicKeys].sort() : null,
     payloadType: envelope.payloadType,
@@ -504,6 +506,7 @@ async function createEchoResponse(
     id: envelopeId,
     version: 1,
     fromPublicKey: echoEd25519PublicKeyHex,  // Ed25519 for identity
+    fromHandle: ECHO_CONFIG.handle,
     toPublicKeys: [originalFromPk],
     ccPublicKeys: null,
     payloadType: 'gns/text.plain',
