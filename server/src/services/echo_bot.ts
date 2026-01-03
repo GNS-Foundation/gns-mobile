@@ -689,12 +689,8 @@ async function processIncomingMessages(): Promise<void> {
         // ✅ NEW: Notify mobile via WebSocket
         try {
           broadcastToUser(msg.from_pk, {
-            type: 'new_message',
-            data: {
-              id: response.envelope.id,
-              from: response.envelope.fromPublicKey,
-              timestamp: response.envelope.timestamp,
-            },
+            type: 'message',
+            envelope: envelopeWithSignature
           });
           console.log(`   📱 Notified mobile of echo response via WebSocket`);
         } catch (wsError) {
