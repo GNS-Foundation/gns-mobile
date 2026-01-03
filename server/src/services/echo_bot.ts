@@ -701,8 +701,14 @@ async function processIncomingMessages(): Promise<void> {
         // Mark original message as delivered
         await db.markMessageDelivered(msg.id);
 
-      } catch (error) {
+      } catch (error: any) {
         console.error(`   ❌ Error processing message ${msg.id}:`, error);
+
+        // ✅ FIXED: If recipient not found (orphaned identity), mark as delivered to stop infinite retries
+        if (error.message && error.message.includes('Recipient record not found')) {
+          console.warn(`   ⚠️ Orphaned message from unknown identity ${msg.from_pk.substring(0, 16)}... - Marking as delivered to clear queue`);
+          await db.markMessageDelivered(msg.id);
+        }
       }
     }
   } catch (error) {
