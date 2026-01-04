@@ -696,7 +696,7 @@ async function processIncomingMessages(): Promise<void> {
         try {
           broadcastToUser(msg.from_pk, {
             type: 'message',
-            envelope: envelopeWithSignature
+            data: envelopeWithSignature
           });
           console.log(`   📱 Notified mobile of echo response via WebSocket`);
         } catch (wsError) {
