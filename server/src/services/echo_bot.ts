@@ -510,11 +510,11 @@ async function createEchoResponse(
     toPublicKeys: [originalFromPk],
     ccPublicKeys: null,
     payloadType: 'gns/text.plain',
-    // ✅ FIXED: Nested encryptedPayload for Tauri/Rust compatibility
+    // ✅ FIXED: Nested encryptedPayload for Tauri/Rust compatibility (HEX encoding)
     encryptedPayload: {
-      ciphertext: encrypted.encryptedPayload,
-      ephemeralPublicKey: encrypted.ephemeralPublicKey,
-      nonce: encrypted.nonce,
+      ciphertext: Buffer.from(encrypted.encryptedPayload, 'base64').toString('hex'),
+      ephemeralPublicKey: Buffer.from(encrypted.ephemeralPublicKey, 'base64').toString('hex'),
+      nonce: Buffer.from(encrypted.nonce, 'base64').toString('hex'),
     },
     payloadSize: payload.length,
     threadId: null,
