@@ -52,7 +52,7 @@ interface EnvelopeData {
   toPublicKeys: string[];
   ccPublicKeys: string[] | null;
   payloadType: string;
-  encryptedPayload: string;
+  encryptedPayload: any;
   payloadSize: number;
   threadId: string | null;
   replyToId: string | null;
@@ -510,13 +510,19 @@ async function createEchoResponse(
     toPublicKeys: [originalFromPk],
     ccPublicKeys: null,
     payloadType: 'gns/text.plain',
-    encryptedPayload: encrypted.encryptedPayload,
+    // ✅ FIXED: Nested encryptedPayload for Tauri/Rust compatibility
+    encryptedPayload: {
+      ciphertext: encrypted.encryptedPayload,
+      ephemeralPublicKey: encrypted.ephemeralPublicKey,
+      nonce: encrypted.nonce,
+    },
     payloadSize: payload.length,
     threadId: null,
     replyToId: null,
     forwardOfId: null,
     timestamp: timestamp,
     expiresAt: null,
+    // Keep top-level fields for legacy compatibility (optional)
     ephemeralPublicKey: encrypted.ephemeralPublicKey,
     recipientKeys: null,
     nonce: encrypted.nonce,
