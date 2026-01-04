@@ -657,8 +657,13 @@ export async function createEnvelopeMessage(
   // Never store it as an object, as that breaks signature verification
   let payloadString = envelope.encryptedPayload || '';
   if (typeof payloadString === 'object') {
-    console.warn('⚠️ encryptedPayload was an object, converting to string');
-    payloadString = JSON.stringify(payloadString);
+    // ✅ Handle nested object (Tauri format)
+    if (payloadString.ciphertext) {
+      payloadString = payloadString.ciphertext;
+    } else {
+      // Fallback for other objects
+      payloadString = JSON.stringify(payloadString);
+    }
   }
 
   const { data, error } = await getSupabase()
