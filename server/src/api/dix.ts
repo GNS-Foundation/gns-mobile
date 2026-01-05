@@ -336,7 +336,7 @@ router.get('/timeline', async (req: Request, res: Response) => {
       .from('posts')
       .select('*')
       .eq('facet_id', 'dix')
-      .eq('status', 'published')
+      // .eq('status', 'published') // Temporarily disabled for debugging
       .order('created_at', { ascending: false })
       .limit(limit);
 
