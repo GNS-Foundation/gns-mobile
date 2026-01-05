@@ -144,8 +144,8 @@ async function transformPost(dbPost: any, includeAuthorDetails = true): Promise<
     isVerified: false,
   };
 
-  if (includeAuthorDetails && dbPost.author_pk) {
-    authorProfile = await getAuthorProfile(dbPost.author_pk);
+  if (includeAuthorDetails && dbPost.author_public_key) {
+    authorProfile = await getAuthorProfile(dbPost.author_public_key);
   }
 
   const payload = typeof dbPost.payload_json === 'string'
@@ -155,7 +155,7 @@ async function transformPost(dbPost: any, includeAuthorDetails = true): Promise<
   return {
     id: dbPost.id,
     author: {
-      publicKey: dbPost.author_pk,
+      publicKey: dbPost.author_public_key,
       handle: dbPost.author_handle || authorProfile.handle,
       displayName: authorProfile.displayName,
       avatarUrl: authorProfile.avatarUrl,
@@ -165,7 +165,7 @@ async function transformPost(dbPost: any, includeAuthorDetails = true): Promise<
     },
     facet: dbPost.facet_id,
     content: {
-      text: payload.text || '',
+      text: dbPost.content || payload.text || '',
       media: payload.media || [],
       links: payload.links || [],
       tags: payload.tags || [],
@@ -186,8 +186,8 @@ async function transformPost(dbPost: any, includeAuthorDetails = true): Promise<
       ipfsCid: payload.ipfs_cid,
       createdAt: dbPost.created_at,
     },
-    thread: (dbPost.reply_to_id || dbPost.quote_of_id) ? {
-      replyToId: dbPost.reply_to_id,
+    thread: (dbPost.reply_to_post_id || dbPost.quote_of_id) ? {
+      replyToId: dbPost.reply_to_post_id,
       quoteOfId: dbPost.quote_of_id,
     } : undefined,
     brand: dbPost.brand_id ? {
@@ -351,10 +351,10 @@ router.get('/timeline', async (req: Request, res: Response) => {
     const before = req.query.before as string | undefined;
 
     let query = supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*')
       .eq('facet_id', 'dix')
-      .eq('status', 'published')
+      .eq('is_deleted', false)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -375,19 +375,19 @@ router.get('/timeline', async (req: Request, res: Response) => {
     let stats;
     if (!before) {
       const { count: totalPosts } = await supabase
-        .from('posts')
+        .from('dix_posts')
         .select('*', { count: 'exact', head: true })
         .eq('facet_id', 'dix')
-        .eq('status', 'published');
+        .eq('is_deleted', false);
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
       const { count: postsToday } = await supabase
-        .from('posts')
+        .from('dix_posts')
         .select('*', { count: 'exact', head: true })
         .eq('facet_id', 'dix')
-        .eq('status', 'published')
+        .eq('is_deleted', false)
         .gte('created_at', today.toISOString());
 
       stats = {
@@ -441,11 +441,11 @@ router.get('/@:handle', async (req: Request, res: Response) => {
 
     // Get posts
     let query = supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*')
       .eq('author_handle', handle)
       .eq('facet_id', 'dix')
-      .eq('status', 'published')
+      .eq('is_deleted', false)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -464,10 +464,10 @@ router.get('/@:handle', async (req: Request, res: Response) => {
 
     // Get user stats
     const { count: totalPosts } = await supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*', { count: 'exact', head: true })
-      .eq('author_pk', alias.pk_root)
-      .eq('status', 'published');
+      .eq('author_public_key', alias.pk_root)
+      .eq('is_deleted', false);
 
     return res.json({
       success: true,
@@ -514,11 +514,11 @@ router.get('/pk/:publicKey', async (req: Request, res: Response) => {
 
     // Get posts
     let query = supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*')
-      .eq('author_pk', pk)
+      .eq('author_public_key', pk)
       .eq('facet_id', 'dix')
-      .eq('status', 'published')
+      .eq('is_deleted', false)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -573,7 +573,7 @@ router.get('/post/:id', async (req: Request, res: Response) => {
 
     // Get post
     const { data: dbPost, error } = await supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*')
       .eq('id', postId)
       .single();
@@ -582,7 +582,7 @@ router.get('/post/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
 
-    if (dbPost.status !== 'published') {
+    if (dbPost.is_deleted === true) {
       return res.status(410).json({ success: false, error: 'Post has been retracted' });
     }
 
@@ -590,10 +590,10 @@ router.get('/post/:id', async (req: Request, res: Response) => {
 
     // Get replies
     const { data: replyData } = await supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*')
-      .eq('reply_to_id', postId)
-      .eq('status', 'published')
+      .eq('reply_to_post_id', postId)
+      .eq('is_deleted', false)
       .order('created_at', { ascending: true })
       .limit(50);
 
@@ -601,7 +601,7 @@ router.get('/post/:id', async (req: Request, res: Response) => {
 
     // Increment view count (fire and forget)
     supabase
-      .from('posts')
+      .from('dix_posts')
       .update({ view_count: (dbPost.view_count || 0) + 1 })
       .eq('id', postId)
       .then(() => { });
@@ -635,10 +635,10 @@ router.get('/tag/:tag', async (req: Request, res: Response) => {
 
     // Search posts with tag in payload_json
     const { data: dbPosts, error } = await supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*')
       .eq('facet_id', 'dix')
-      .eq('status', 'published')
+      .eq('is_deleted', false)
       .contains('payload_json', { tags: [tag] })
       .order('created_at', { ascending: false })
       .limit(limit);
@@ -680,10 +680,10 @@ router.get('/search', async (req: Request, res: Response) => {
 
     // Full-text search using ILIKE on text content
     const { data: dbPosts, error } = await supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*')
       .eq('facet_id', 'dix')
-      .eq('status', 'published')
+      .eq('is_deleted', false)
       .ilike('payload_json->>text', `%${query}%`)
       .order('created_at', { ascending: false })
       .limit(limit);
@@ -717,31 +717,31 @@ router.get('/stats', async (req: Request, res: Response) => {
   try {
     // Total posts
     const { count: totalPosts } = await supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*', { count: 'exact', head: true })
       .eq('facet_id', 'dix')
-      .eq('status', 'published');
+      .eq('is_deleted', false);
 
     // Posts today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const { count: postsToday } = await supabase
-      .from('posts')
+      .from('dix_posts')
       .select('*', { count: 'exact', head: true })
       .eq('facet_id', 'dix')
-      .eq('status', 'published')
+      .eq('is_deleted', false)
       .gte('created_at', today.toISOString());
 
     // Active users today (distinct authors)
     const { data: activeUsers } = await supabase
-      .from('posts')
-      .select('author_pk')
+      .from('dix_posts')
+      .select('author_public_key')
       .eq('facet_id', 'dix')
-      .eq('status', 'published')
+      .eq('is_deleted', false)
       .gte('created_at', today.toISOString());
 
-    const uniqueAuthors = new Set(activeUsers?.map((p: { author_pk: string }) => p.author_pk) || []);
+    const uniqueAuthors = new Set(activeUsers?.map((p: { author_public_key: string }) => p.author_public_key) || []);
 
     return res.json({
       success: true,
