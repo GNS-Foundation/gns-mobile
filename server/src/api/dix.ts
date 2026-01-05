@@ -228,8 +228,7 @@ router.post('/publish', async (req: Request, res: Response) => {
       reply_to_id
     } = req.body;
 
-    // Call Supabase RPC
-    const { data, error } = await supabase.rpc('publish_dix_post', {
+    const params = {
       p_id: post_id,
       p_facet_id: facet_id,
       p_author_public_key: author_public_key,
@@ -243,7 +242,14 @@ router.post('/publish', async (req: Request, res: Response) => {
       p_reply_to_post_id: reply_to_id || null,
       p_location_name: null,
       p_visibility: 'public'
-    });
+    };
+
+    console.log('Calling publish_dix_post with:', JSON.stringify(params, null, 2));
+
+    // Call Supabase RPC
+    const { data, error } = await supabase.rpc('publish_dix_post', params);
+
+    console.log('RPC Result:', { data, error });
 
     if (error) {
       console.error('RPC publish_dix_post error:', error);
