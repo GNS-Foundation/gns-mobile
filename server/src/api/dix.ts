@@ -102,8 +102,8 @@ async function getAuthorProfile(pk: string): Promise<{
       };
     }
 
-    const recordJson = typeof record.record_json === 'string' 
-      ? JSON.parse(record.record_json) 
+    const recordJson = typeof record.record_json === 'string'
+      ? JSON.parse(record.record_json)
       : record.record_json || {};
 
     // Find profile module
@@ -209,6 +209,51 @@ async function transformPosts(dbPosts: any[]): Promise<WebPost[]> {
 // ===========================================
 
 /**
+ * POST /web/dix/publish
+ * Publish a new DIX post
+ */
+router.post('/publish', async (req: Request, res: Response) => {
+  try {
+    const {
+      post_id,
+      facet_id,
+      author_public_key,
+      author_handle,
+      content,
+      media,
+      created_at,
+      tags,
+      mentions,
+      signature
+    } = req.body;
+
+    // Call Supabase RPC
+    const { data, error } = await supabase.rpc('publish_dix_post', {
+      p_post_id: post_id,
+      p_facet_id: facet_id,
+      p_author_pk: author_public_key,
+      p_author_handle: author_handle,
+      p_content: content,
+      p_media: media,
+      p_created_at: created_at,
+      p_tags: tags,
+      p_mentions: mentions,
+      p_signature: signature
+    });
+
+    if (error) {
+      console.error('RPC publish_dix_post error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('POST /web/dix/publish error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
  * GET /web/dix/timeline
  * Public DIX timeline
  */
@@ -249,7 +294,7 @@ router.get('/timeline', async (req: Request, res: Response) => {
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
+
       const { count: postsToday } = await supabase
         .from('posts')
         .select('*', { count: 'exact', head: true })
@@ -471,7 +516,7 @@ router.get('/post/:id', async (req: Request, res: Response) => {
       .from('posts')
       .update({ view_count: (dbPost.view_count || 0) + 1 })
       .eq('id', postId)
-      .then(() => {});
+      .then(() => { });
 
     return res.json({
       success: true,
@@ -592,7 +637,7 @@ router.get('/stats', async (req: Request, res: Response) => {
     // Posts today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const { count: postsToday } = await supabase
       .from('posts')
       .select('*', { count: 'exact', head: true })
