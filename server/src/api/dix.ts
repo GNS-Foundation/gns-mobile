@@ -355,6 +355,7 @@ router.get('/timeline', async (req: Request, res: Response) => {
       .select('*')
       .eq('facet_id', 'dix')
       .eq('is_deleted', false)
+      .is('reply_to_post_id', null)
       .order('created_at', { ascending: false })
       .limit(limit);
 
