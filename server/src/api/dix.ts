@@ -283,31 +283,36 @@ router.post('/publish', async (req: Request, res: Response) => {
       reply_to_id
     } = req.body;
 
-    const params = {
-      p_id: post_id,
-      p_facet_id: facet_id,
-      p_author_public_key: author_public_key,
-      p_author_handle: author_handle,
-      p_content: content,
-      p_media: media,
-      p_created_at: created_at,
-      p_tags: tags,
-      p_mentions: mentions,
-      p_signature: signature,
-      p_reply_to_post_id: reply_to_id || null,
-      p_location_name: null,
-      p_visibility: 'public'
-    };
+    // DIRECT INSERT (Bypassing broken RPC)
+    const { data, error } = await supabase.from('posts').insert({
+      id: post_id,
+      facet_id: facet_id || 'dix',
+      author_pk: author_public_key,
+      author_handle: author_handle,
+      payload_type: 'gns/post.public', // Standard type
+      payload_json: {
+        text: content,
+        media: media || [],
+        tags: tags || [],
+        mentions: mentions || [],
+        location_label: null
+      },
+      status: 'published',
+      signature: signature,
+      created_at: created_at,
+      reply_to_id: reply_to_id || null,
 
-    console.log('Calling publish_dix_post with:', JSON.stringify(params, null, 2));
-
-    // Call Supabase RPC
-    const { data, error } = await supabase.rpc('publish_dix_post', params);
-
-    console.log('RPC Result:', { data, error });
+      // Defaults
+      trust_score: 0,
+      breadcrumb_count: 0,
+      like_count: 0,
+      reply_count: 0,
+      repost_count: 0,
+      view_count: 0
+    }).select().single();
 
     if (error) {
-      console.error('RPC publish_dix_post error:', error);
+      console.error('Direct insert error:', error);
       return res.status(500).json({ success: false, error: error.message });
     }
 
