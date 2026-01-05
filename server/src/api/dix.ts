@@ -288,31 +288,37 @@ router.post('/publish', async (req: Request, res: Response) => {
       reply_to_id
     } = req.body;
 
-    const params = {
-      p_id: post_id,
-      p_facet_id: facet_id || 'dix',
-      p_author_public_key: author_public_key,
-      p_author_handle: author_handle,
-      p_content: content,
-      p_media: media || [],
-      p_created_at: created_at,
-      p_tags: tags || [],
-      p_mentions: mentions || [],
-      p_signature: signature,
-      p_reply_to_post_id: reply_to_id || null,
-      p_location_name: null,
-      p_visibility: 'public'
-    };
-
-    // Call Supabase RPC
-    const { data, error } = await supabase.rpc('publish_dix_post', params);
+    // Insert into dix_posts (same table timeline reads from!)
+    const { data, error } = await supabase.from('dix_posts').insert({
+      id: post_id,
+      facet_id: facet_id || 'dix',
+      author_public_key: author_public_key,
+      author_handle: author_handle,
+      content: content,  // Direct content field
+      media: media || [],
+      tags: tags || [],
+      mentions: mentions || [],
+      signature: signature,
+      created_at: created_at || new Date().toISOString(),
+      reply_to_post_id: reply_to_id || null, // Note: reply_to_post_id
+      visibility: 'public',
+      is_deleted: false,
+    }).select().single();
 
     if (error) {
-      console.error('RPC publish_dix_post error:', error);
+      console.error('DIX insert error:', error);
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    return res.json({ success: true, data });
+    return res.json({
+      success: true,
+      data: {
+        message: 'Post published successfully',
+        post_id: data.id,
+        success: true,
+        network_post_id: data.id
+      }
+    });
   } catch (error) {
     console.error('POST /web/dix/publish error:', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
