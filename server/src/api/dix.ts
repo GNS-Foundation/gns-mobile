@@ -262,508 +262,435 @@ router.get('/debug/diagnosis', async (req: Request, res: Response) => {
       results.readBackData = read.data;
     }
 
-    return res.json({ success: true, results });
-  } catch (e) {
-    return res.json({ success: false, error: String(e), stack: (e as Error).stack });
-  }
-});
-router.post('/publish', async (req: Request, res: Response) => {
-  try {
-    const {
-      post_id,
-      facet_id,
-      author_public_key,
-      author_handle,
-      content,
-      media,
-      created_at,
-      tags,
-      mentions,
-      signature,
-      reply_to_id
-    } = req.body;
+    /**
+     * POST /web/dix/publish
+     * Publish a new DIX post via RPC
+     */
+    router.post('/publish', async (req: Request, res: Response) => {
+      try {
+        const {
+          post_id,
+          facet_id,
+          author_public_key,
+          author_handle,
+          content,
+          media,
+          created_at,
+          tags,
+          mentions,
+          signature,
+          reply_to_id
+        } = req.body;
 
-    // DIRECT INSERT (Bypassing broken RPC)
-    const { data, error } = await supabase.from('posts').insert({
-      id: post_id,
-      facet_id: facet_id || 'dix',
-      author_pk: author_public_key,
-      author_handle: author_handle,
-      payload_type: 'gns/post.public', // Standard type
-      payload_json: {
-        text: content,
-        media: media || [],
-        tags: tags || [],
-        mentions: mentions || [],
-        location_label: null
-      },
-      status: 'published',
-      signature: signature,
-      created_at: created_at,
-      reply_to_id: reply_to_id || null,
+        const params = {
+          p_id: post_id,
+          p_facet_id: facet_id || 'dix',
+          p_author_public_key: author_public_key,
+          p_author_handle: author_handle,
+          p_content: content,
+          p_media: media || [],
+          p_created_at: created_at,
+          p_tags: tags || [],
+          p_mentions: mentions || [],
+          p_signature: signature,
+          p_reply_to_post_id: reply_to_id || null,
+          p_location_name: null,
+          p_visibility: 'public'
+        };
 
-      // Defaults
-      trust_score: 0,
-      breadcrumb_count: 0,
-      like_count: 0,
-      reply_count: 0,
-      repost_count: 0,
-      view_count: 0
-    }).select().single();
+        // Call Supabase RPC
+        const { data, error } = await supabase.rpc('publish_dix_post', params);
 
-    if (error) {
-      console.error('Direct insert error:', error);
-      return res.status(500).json({ success: false, error: error.message });
-    }
+        if (error) {
+          console.error('RPC publish_dix_post error:', error);
+          return res.status(500).json({ success: false, error: error.message });
+        }
 
-    return res.json({ success: true, data });
-  } catch (error) {
-    console.error('POST /web/dix/publish error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
-
-/**
- * GET /web/dix/timeline
- * Public DIX timeline
- */
-// ===========================================
-// ROUTES
-// ===========================================
-
-/**
- * DEBUG: Dump posts table
- */
-router.get('/debug/dump', async (req: Request, res: Response) => {
-  try {
-    const { data, error } = await supabase
-      .from('dix_posts')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(10);
-
-    return res.json({ success: true, count: data?.length, data, error });
-  } catch (e) {
-    return res.json({ success: false, error: String(e) });
-  }
-});
-/**
- * GET /web/dix/timeline
- * Public DIX timeline
- */
-router.get('/timeline', async (req: Request, res: Response) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
-    const offset = parseInt(req.query.offset as string) || 0;
-
-    // Read from dix_posts table (where posts actually are!)
-    const { data: dbPosts, error } = await supabase
-      .from('dix_posts')  // ✅ CORRECT TABLE
-      .select('*')
-      .eq('is_deleted', false)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-
-    if (error) {
-      console.error('Timeline query error:', error);
-      return res.status(500).json({ success: false, error: 'Database error' });
-    }
-
-    // Map dix_posts columns to WebPost format
-    const posts = (dbPosts || []).map(p => ({
-      id: p.id,
-      author: {
-        publicKey: p.author_public_key,  // dix_posts uses author_public_key
-        handle: p.author_handle,
-        displayName: p.author_handle,
-        avatarUrl: null,
-        trustScore: 0,
-        breadcrumbCount: 0,
-        isVerified: !!p.author_handle,
-      },
-      facet: p.facet_id,
-      content: {
-        text: p.content,  // dix_posts uses content, not payload_json
-        media: p.media || [],
-        links: [],
-        tags: p.tags || [],
-        mentions: p.mentions || [],
-        location: p.location_name,
-      },
-      engagement: {
-        likes: p.like_count || 0,
-        replies: p.reply_count || 0,
-        reposts: p.repost_count || 0,
-        quotes: 0,
-        views: p.view_count || 0,
-      },
-      meta: {
-        signature: p.signature,
-        trustScoreAtPost: 0,
-        breadcrumbsAtPost: 0,
-        createdAt: p.created_at,
-      },
-    }));
-
-    return res.json({
-      success: true,
-      data: {
-        posts,
-        cursor: posts.length > 0 ? posts[posts.length - 1].meta.createdAt : null,
-        hasMore: posts.length === limit,
-        stats: { totalPosts: dbPosts?.length || 0, postsToday: 0 },
-      },
+        return res.json({ success: true, data });
+      } catch (error) {
+        console.error('POST /web/dix/publish error:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
+      }
     });
-  } catch (error) {
-    console.error('GET /web/dix/timeline error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
 
-/**
- * GET /web/dix/@:handle
- * User's DIX posts by handle
- */
-router.get('/@:handle', async (req: Request, res: Response) => {
-  try {
-    let handle = req.params.handle.toLowerCase();
-    if (handle.startsWith('@')) {
-      handle = handle.substring(1);
-    }
+    /**
+     * GET /web/dix/timeline
+     * Public DIX timeline
+     */
+    router.get('/timeline', async (req: Request, res: Response) => {
+      try {
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+        const offset = parseInt(req.query.offset as string) || 0;
 
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
-    const before = req.query.before as string | undefined;
+        // Read from dix_posts table
+        const { data: dbPosts, error } = await supabase
+          .from('dix_posts')
+          .select('*')
+          .eq('is_deleted', false)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
 
-    // Get user from aliases
-    const { data: alias } = await supabase
-      .from('aliases')
-      .select('*')
-      .eq('handle', handle)
-      .single();
+        if (error) {
+          console.error('Timeline query error:', error);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
 
-    if (!alias) {
-      return res.status(404).json({ success: false, error: 'User not found' });
-    }
+        const posts = await transformPosts(dbPosts || []);
 
-    // Get user profile
-    const profile = await getAuthorProfile(alias.pk_root);
+        // Get stats (only on first page)
+        let stats;
+        if (offset === 0) {
+          const { count: totalPosts } = await supabase
+            .from('dix_posts')
+            .select('*', { count: 'exact', head: true })
+            .eq('is_deleted', false);
 
-    // Get posts
-    let query = supabase
-      .from('posts')
-      .select('*')
-      .eq('author_handle', handle)
-      .eq('facet_id', 'dix')
-      .eq('status', 'published')
-      .order('created_at', { ascending: false })
-      .limit(limit);
+          stats = {
+            totalPosts: totalPosts || 0,
+            postsToday: 0,
+          };
+        }
 
-    if (before) {
-      query = query.lt('created_at', before);
-    }
-
-    const { data: dbPosts, error } = await query;
-
-    if (error) {
-      console.error('User posts query error:', error);
-      return res.status(500).json({ success: false, error: 'Database error' });
-    }
-
-    const posts = await transformPosts(dbPosts || []);
-
-    // Get user stats
-    const { count: totalPosts } = await supabase
-      .from('posts')
-      .select('*', { count: 'exact', head: true })
-      .eq('author_pk', alias.pk_root)
-      .eq('status', 'published');
-
-    return res.json({
-      success: true,
-      data: {
-        user: {
-          publicKey: alias.pk_root,
-          handle,
-          displayName: profile.displayName || handle,
-          avatarUrl: profile.avatarUrl,
-          trustScore: profile.trustScore,
-          breadcrumbCount: profile.breadcrumbCount,
-          isVerified: profile.isVerified,
-        },
-        posts,
-        stats: {
-          totalPosts: totalPosts || 0,
-        },
-        cursor: posts.length > 0 ? posts[posts.length - 1].meta.createdAt : null,
-        hasMore: posts.length === limit,
-      },
+        return res.json({
+          success: true,
+          data: {
+            posts,
+            cursor: posts.length > 0 ? posts[posts.length - 1].meta.createdAt : null,
+            hasMore: posts.length === limit,
+            stats,
+          },
+        });
+      } catch (error) {
+        console.error('GET /web/dix/timeline error:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
+      }
     });
-  } catch (error) {
-    console.error('GET /web/dix/@:handle error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
 
-/**
- * GET /web/dix/pk/:publicKey
- * Posts by public key
- */
-router.get('/pk/:publicKey', async (req: Request, res: Response) => {
-  try {
-    const pk = req.params.publicKey.toLowerCase();
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
-    const before = req.query.before as string | undefined;
+    /**
+     * GET /web/dix/@:handle
+     * User's DIX posts by handle
+     */
+    router.get('/@:handle', async (req: Request, res: Response) => {
+      try {
+        let handle = req.params.handle.toLowerCase();
+        if (handle.startsWith('@')) {
+          handle = handle.substring(1);
+        }
 
-    if (!/^[0-9a-f]{64}$/.test(pk)) {
-      return res.status(400).json({ success: false, error: 'Invalid public key format' });
-    }
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+        const offset = parseInt(req.query.offset as string) || 0;
 
-    // Get profile
-    const profile = await getAuthorProfile(pk);
+        // Get user from aliases
+        const { data: alias } = await supabase
+          .from('aliases')
+          .select('*')
+          .eq('handle', handle)
+          .single();
 
-    // Get posts
-    let query = supabase
-      .from('posts')
-      .select('*')
-      .eq('author_pk', pk)
-      .eq('facet_id', 'dix')
-      .eq('status', 'published')
-      .order('created_at', { ascending: false })
-      .limit(limit);
+        if (!alias) {
+          return res.status(404).json({ success: false, error: 'User not found' });
+        }
 
-    if (before) {
-      query = query.lt('created_at', before);
-    }
+        // Get user profile
+        const profile = await getAuthorProfile(alias.pk_root);
 
-    const { data: dbPosts, error } = await query;
+        // Get posts from dix_posts
+        const { data: dbPosts, error } = await supabase
+          .from('dix_posts')
+          .select('*')
+          .eq('author_public_key', alias.pk_root) // Use PK explicitly
+          .eq('is_deleted', false)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
 
-    if (error) {
-      console.error('PK posts query error:', error);
-      return res.status(500).json({ success: false, error: 'Database error' });
-    }
+        if (error) {
+          console.error('User posts query error:', error);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
 
-    const posts = await transformPosts(dbPosts || []);
+        const posts = await transformPosts(dbPosts || []);
 
-    return res.json({
-      success: true,
-      data: {
-        user: {
-          publicKey: pk,
-          handle: profile.handle,
-          displayName: profile.displayName,
-          avatarUrl: profile.avatarUrl,
-          trustScore: profile.trustScore,
-          breadcrumbCount: profile.breadcrumbCount,
-          isVerified: profile.isVerified,
-        },
-        posts,
-        cursor: posts.length > 0 ? posts[posts.length - 1].meta.createdAt : null,
-        hasMore: posts.length === limit,
-      },
+        // Get user stats
+        const { count: totalPosts } = await supabase
+          .from('dix_posts')
+          .select('*', { count: 'exact', head: true })
+          .eq('author_public_key', alias.pk_root)
+          .eq('is_deleted', false);
+
+        return res.json({
+          success: true,
+          data: {
+            user: {
+              publicKey: alias.pk_root,
+              handle,
+              displayName: profile.displayName || handle,
+              avatarUrl: profile.avatarUrl,
+              trustScore: profile.trustScore,
+              breadcrumbCount: profile.breadcrumbCount,
+              isVerified: profile.isVerified,
+            },
+            posts,
+            cursor: posts.length > 0 ? posts[posts.length - 1].meta.createdAt : null,
+            hasMore: posts.length === limit,
+            stats: { totalPosts: totalPosts || 0 },
+          },
+        });
+      } catch (error) {
+        console.error('GET /web/dix/@:handle error:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
+      }
     });
-  } catch (error) {
-    console.error('GET /web/dix/pk/:pk error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
 
-/**
- * GET /web/dix/post/:id
- * Single post with replies
- */
-router.get('/post/:id', async (req: Request, res: Response) => {
-  try {
-    const postId = req.params.id;
+    /**
+     * GET /web/dix/pk/:publicKey
+     * Posts by public key
+     */
+    router.get('/pk/:publicKey', async (req: Request, res: Response) => {
+      try {
+        const pk = req.params.publicKey.toLowerCase();
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+        const offset = parseInt(req.query.offset as string) || 0;
 
-    // Validate UUID
-    if (!/^[0-9a-f-]{36}$/i.test(postId)) {
-      return res.status(400).json({ success: false, error: 'Invalid post ID format' });
-    }
+        if (!/^[0-9a-f]{64}$/.test(pk)) {
+          return res.status(400).json({ success: false, error: 'Invalid public key format' });
+        }
 
-    // Get post
-    const { data: dbPost, error } = await supabase
-      .from('posts')
-      .select('*')
-      .eq('id', postId)
-      .single();
+        // Get profile
+        const profile = await getAuthorProfile(pk);
 
-    if (error || !dbPost) {
-      return res.status(404).json({ success: false, error: 'Post not found' });
-    }
+        // Get posts from dix_posts
+        const { data: dbPosts, error } = await supabase
+          .from('dix_posts')
+          .select('*')
+          .eq('author_public_key', pk)
+          .eq('is_deleted', false)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
 
-    if (dbPost.status !== 'published') {
-      return res.status(410).json({ success: false, error: 'Post has been retracted' });
-    }
+        if (error) {
+          console.error('PK posts query error:', error);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
 
-    const post = await transformPost(dbPost);
+        const posts = await transformPosts(dbPosts || []);
 
-    // Get replies
-    const { data: replyData } = await supabase
-      .from('posts')
-      .select('*')
-      .eq('reply_to_id', postId)
-      .eq('status', 'published')
-      .order('created_at', { ascending: true })
-      .limit(50);
-
-    const replies = await transformPosts(replyData || []);
-
-    // Increment view count (fire and forget)
-    supabase
-      .from('posts')
-      .update({ view_count: (dbPost.view_count || 0) + 1 })
-      .eq('id', postId)
-      .then(() => { });
-
-    return res.json({
-      success: true,
-      data: {
-        post,
-        replies,
-        replyCount: replies.length,
-      },
+        return res.json({
+          success: true,
+          data: {
+            user: {
+              publicKey: pk,
+              handle: profile.handle,
+              displayName: profile.displayName,
+              avatarUrl: profile.avatarUrl,
+              trustScore: profile.trustScore,
+              breadcrumbCount: profile.breadcrumbCount,
+              isVerified: profile.isVerified,
+            },
+            posts,
+            cursor: posts.length > 0 ? posts[posts.length - 1].meta.createdAt : null,
+            hasMore: posts.length === limit,
+          },
+        });
+      } catch (error) {
+        console.error('GET /web/dix/pk/:pk error:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
+      }
     });
-  } catch (error) {
-    console.error('GET /web/dix/post/:id error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
 
-/**
- * GET /web/dix/tag/:tag
- * Posts by hashtag
- */
-router.get('/tag/:tag', async (req: Request, res: Response) => {
-  try {
-    let tag = req.params.tag.toLowerCase();
-    if (tag.startsWith('#')) {
-      tag = tag.substring(1);
-    }
+    /**
+     * GET /web/dix/post/:id
+     * Single post with replies
+     */
+    router.get('/post/:id', async (req: Request, res: Response) => {
+      try {
+        const postId = req.params.id;
 
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+        // Validate UUID
+        if (!/^[0-9a-f-]{36}$/i.test(postId)) {
+          return res.status(400).json({ success: false, error: 'Invalid post ID format' });
+        }
 
-    // Search posts with tag in payload_json
-    const { data: dbPosts, error } = await supabase
-      .from('posts')
-      .select('*')
-      .eq('facet_id', 'dix')
-      .eq('status', 'published')
-      .contains('payload_json', { tags: [tag] })
-      .order('created_at', { ascending: false })
-      .limit(limit);
+        // Get post from dix_posts
+        const { data: dbPost, error } = await supabase
+          .from('dix_posts')
+          .select('*')
+          .eq('id', postId)
+          .single();
 
-    if (error) {
-      console.error('Tag search error:', error);
-      return res.status(500).json({ success: false, error: 'Database error' });
-    }
+        if (error || !dbPost) {
+          return res.status(404).json({ success: false, error: 'Post not found' });
+        }
 
-    const posts = await transformPosts(dbPosts || []);
+        if (dbPost.is_deleted) {
+          return res.status(410).json({ success: false, error: 'Post has been retracted' });
+        }
 
-    return res.json({
-      success: true,
-      data: {
-        tag: `#${tag}`,
-        posts,
-        count: posts.length,
-      },
+        const post = await transformPost(dbPost);
+
+        // Get replies from dix_posts
+        const { data: replyData } = await supabase
+          .from('dix_posts')
+          .select('*')
+          .eq('reply_to_post_id', postId) // Note: reply_to_post_id
+          .eq('is_deleted', false)
+          .order('created_at', { ascending: true })
+          .limit(50);
+
+        const replies = await transformPosts(replyData || []);
+
+        // Increment view count (fire and forget)
+        supabase
+          .from('dix_posts')
+          .update({ view_count: (dbPost.view_count || 0) + 1 })
+          .eq('id', postId)
+          .then(() => { });
+
+        return res.json({
+          success: true,
+          data: {
+            post,
+            replies,
+            replyCount: replies.length,
+          },
+        });
+      } catch (error) {
+        console.error('GET /web/dix/post/:id error:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
+      }
     });
-  } catch (error) {
-    console.error('GET /web/dix/tag/:tag error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
 
-/**
- * GET /web/dix/search
- * Search posts
- */
-router.get('/search', async (req: Request, res: Response) => {
-  try {
-    const query = (req.query.q as string || '').trim();
+    /**
+     * GET /web/dix/tag/:tag
+     * Posts by hashtag
+     */
+    router.get('/tag/:tag', async (req: Request, res: Response) => {
+      try {
+        let tag = req.params.tag.toLowerCase();
+        if (tag.startsWith('#')) {
+          tag = tag.substring(1);
+        }
 
-    if (!query || query.length < 2) {
-      return res.status(400).json({ success: false, error: 'Query must be at least 2 characters' });
-    }
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
 
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+        // Search posts with tag in unix_array column? Or just filtered?
+        // dix_posts has 'tags' column which is float8[] or text[]?
+        // Assuming text[], use 'cs' (contains)
+        const { data: dbPosts, error } = await supabase
+          .from('dix_posts')
+          .select('*')
+          .eq('is_deleted', false)
+          .contains('tags', [tag])
+          .order('created_at', { ascending: false })
+          .limit(limit);
 
-    // Full-text search using ILIKE on text content
-    const { data: dbPosts, error } = await supabase
-      .from('posts')
-      .select('*')
-      .eq('facet_id', 'dix')
-      .eq('status', 'published')
-      .ilike('payload_json->>text', `%${query}%`)
-      .order('created_at', { ascending: false })
-      .limit(limit);
+        if (error) {
+          console.error('Tag search error:', error);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
 
-    if (error) {
-      console.error('Search error:', error);
-      return res.status(500).json({ success: false, error: 'Database error' });
-    }
+        const posts = await transformPosts(dbPosts || []);
 
-    const posts = await transformPosts(dbPosts || []);
-
-    return res.json({
-      success: true,
-      data: {
-        query,
-        posts,
-        count: posts.length,
-      },
+        return res.json({
+          success: true,
+          data: {
+            tag: `#${tag}`,
+            posts,
+            count: posts.length,
+          },
+        });
+      } catch (error) {
+        console.error('GET /web/dix/tag/:tag error:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
+      }
     });
-  } catch (error) {
-    console.error('GET /web/dix/search error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
 
-/**
- * GET /web/dix/stats
- * DIX statistics
- */
-router.get('/stats', async (req: Request, res: Response) => {
-  try {
-    // Total posts
-    const { count: totalPosts } = await supabase
-      .from('posts')
-      .select('*', { count: 'exact', head: true })
-      .eq('facet_id', 'dix')
-      .eq('status', 'published');
+    /**
+     * GET /web/dix/search
+     * Search posts
+     */
+    router.get('/search', async (req: Request, res: Response) => {
+      try {
+        const query = (req.query.q as string || '').trim();
 
-    // Posts today
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+        if (!query || query.length < 2) {
+          return res.status(400).json({ success: false, error: 'Query must be at least 2 characters' });
+        }
 
-    const { count: postsToday } = await supabase
-      .from('posts')
-      .select('*', { count: 'exact', head: true })
-      .eq('facet_id', 'dix')
-      .eq('status', 'published')
-      .gte('created_at', today.toISOString());
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
 
-    // Active users today (distinct authors)
-    const { data: activeUsers } = await supabase
-      .from('posts')
-      .select('author_pk')
-      .eq('facet_id', 'dix')
-      .eq('status', 'published')
-      .gte('created_at', today.toISOString());
+        // Full-text search using ILIKE on content column
+        const { data: dbPosts, error } = await supabase
+          .from('dix_posts')
+          .select('*')
+          .eq('is_deleted', false)
+          .ilike('content', `%${query}%`)
+          .order('created_at', { ascending: false })
+          .limit(limit);
 
-    const uniqueAuthors = new Set(activeUsers?.map((p: { author_pk: string }) => p.author_pk) || []);
+        if (error) {
+          console.error('Search error:', error);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
 
-    return res.json({
-      success: true,
-      data: {
-        totalPosts: totalPosts || 0,
-        postsToday: postsToday || 0,
-        activeUsersToday: uniqueAuthors.size,
-      },
+        const posts = await transformPosts(dbPosts || []);
+
+        return res.json({
+          success: true,
+          data: {
+            query,
+            posts,
+            count: posts.length,
+          },
+        });
+      } catch (error) {
+        console.error('GET /web/dix/search error:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
+      }
     });
-  } catch (error) {
-    console.error('GET /web/dix/stats error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
 
-export default router;
+    /**
+     * GET /web/dix/stats
+     * DIX statistics
+     */
+    router.get('/stats', async (req: Request, res: Response) => {
+      try {
+        // Total posts
+        const { count: totalPosts } = await supabase
+          .from('dix_posts')
+          .select('*', { count: 'exact', head: true })
+          .eq('is_deleted', false);
+
+        // Posts today
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const { count: postsToday } = await supabase
+          .from('dix_posts')
+          .select('*', { count: 'exact', head: true })
+          .eq('is_deleted', false)
+          .gte('created_at', today.toISOString());
+
+        // Active users today
+        const { data: activeUsers } = await supabase
+          .from('dix_posts')
+          .select('author_public_key')
+          .eq('is_deleted', false)
+          .gte('created_at', today.toISOString());
+
+        const uniqueAuthors = new Set(activeUsers?.map((p: { author_public_key: string }) => p.author_public_key) || []);
+
+        return res.json({
+          success: true,
+          data: {
+            totalPosts: totalPosts || 0,
+            postsToday: postsToday || 0,
+            activeUsersToday: uniqueAuthors.size,
+          },
+        });
+      } catch (error) {
+        console.error('GET /web/dix/stats error:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
+      }
+    });
+
+    export default router;
