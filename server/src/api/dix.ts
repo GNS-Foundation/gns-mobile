@@ -209,6 +209,23 @@ async function transformPosts(dbPosts: any[]): Promise<WebPost[]> {
 // ===========================================
 
 /**
+ * DEBUG: Dump posts table
+ */
+router.get('/debug/dump', async (req: Request, res: Response) => {
+  try {
+    const { data, error } = await supabase
+      .from('posts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    return res.json({ success: true, count: data?.length, data, error });
+  } catch (e) {
+    return res.json({ success: false, error: String(e) });
+  }
+});
+
+/**
  * POST /web/dix/publish
  * Publish a new DIX post
  */
