@@ -132,67 +132,67 @@ async function getAuthorProfile(pk: string): Promise<{
 }
 
 /**
- * Transform database post to web-friendly format
+ * Transform dix_posts row to web-friendly format
  */
 async function transformPost(dbPost: any, includeAuthorDetails = true): Promise<WebPost> {
+  // dix_posts uses author_public_key, not author_pk
+  const authorPk = dbPost.author_public_key || dbPost.author_pk;
+
   let authorProfile = {
     displayName: null as string | null,
     avatarUrl: null as string | null,
-    trustScore: dbPost.trust_score || 0,
-    breadcrumbCount: dbPost.breadcrumb_count || 0,
+    trustScore: 0,
+    breadcrumbCount: 0,
     handle: dbPost.author_handle || null,
     isVerified: false,
   };
 
-  if (includeAuthorDetails && dbPost.author_pk) {
-    authorProfile = await getAuthorProfile(dbPost.author_pk);
+  if (includeAuthorDetails && authorPk) {
+    authorProfile = await getAuthorProfile(authorPk);
   }
 
-  const payload = typeof dbPost.payload_json === 'string'
-    ? JSON.parse(dbPost.payload_json)
-    : dbPost.payload_json || {};
+  // dix_posts has direct 'content' field, not payload_json
+  const text = dbPost.content || (dbPost.payload_json?.text) || '';
+  const media = dbPost.media || dbPost.payload_json?.media || [];
+  const tags = dbPost.tags || dbPost.payload_json?.tags || [];
+  const mentions = dbPost.mentions || dbPost.payload_json?.mentions || [];
 
   return {
     id: dbPost.id,
     author: {
-      publicKey: dbPost.author_pk,
+      publicKey: authorPk,
       handle: dbPost.author_handle || authorProfile.handle,
       displayName: authorProfile.displayName,
       avatarUrl: authorProfile.avatarUrl,
-      trustScore: authorProfile.trustScore || dbPost.trust_score || 0,
-      breadcrumbCount: authorProfile.breadcrumbCount || dbPost.breadcrumb_count || 0,
+      trustScore: authorProfile.trustScore,
+      breadcrumbCount: authorProfile.breadcrumbCount,
       isVerified: authorProfile.isVerified,
     },
     facet: dbPost.facet_id,
     content: {
-      text: payload.text || '',
-      media: payload.media || [],
-      links: payload.links || [],
-      tags: payload.tags || [],
-      mentions: payload.mentions || [],
-      location: payload.location_label,
+      text: text,
+      media: media,
+      links: [],
+      tags: tags,
+      mentions: mentions,
+      location: dbPost.location_name,
     },
     engagement: {
       likes: dbPost.like_count || 0,
       replies: dbPost.reply_count || 0,
       reposts: dbPost.repost_count || 0,
-      quotes: dbPost.quote_count || 0,
+      quotes: 0,
       views: dbPost.view_count || 0,
     },
     meta: {
       signature: dbPost.signature,
-      trustScoreAtPost: dbPost.trust_score || 0,
-      breadcrumbsAtPost: dbPost.breadcrumb_count || 0,
-      ipfsCid: payload.ipfs_cid,
+      trustScoreAtPost: 0,
+      breadcrumbsAtPost: 0,
       createdAt: dbPost.created_at,
     },
-    thread: (dbPost.reply_to_id || dbPost.quote_of_id) ? {
-      replyToId: dbPost.reply_to_id,
-      quoteOfId: dbPost.quote_of_id,
-    } : undefined,
-    brand: dbPost.brand_id ? {
-      id: dbPost.brand_id,
-      role: dbPost.brand_role,
+    thread: dbPost.reply_to_post_id ? {
+      replyToId: dbPost.reply_to_post_id,
+      quoteOfId: null,
     } : undefined,
   };
 }
