@@ -186,8 +186,8 @@ async function transformPost(dbPost: any, includeAuthorDetails = true): Promise<
       ipfsCid: payload.ipfs_cid,
       createdAt: dbPost.created_at,
     },
-    thread: (dbPost.reply_to_post_id || dbPost.quote_of_id) ? {
-      replyToId: dbPost.reply_to_post_id,
+    thread: (dbPost.reply_to_id || dbPost.quote_of_id) ? {
+      replyToId: dbPost.reply_to_id,
       quoteOfId: dbPost.quote_of_id,
     } : undefined,
     brand: dbPost.brand_id ? {
@@ -241,7 +241,7 @@ router.post('/publish', async (req: Request, res: Response) => {
       mentions: mentions || [],
       signature: signature,
       created_at: created_at || new Date().toISOString(),
-      reply_to_post_id: reply_to_id || null,
+      reply_to_id: reply_to_id || null,
       visibility: 'public',
       is_deleted: false,
     }).select().single();
@@ -355,7 +355,7 @@ router.get('/timeline', async (req: Request, res: Response) => {
       .select('*')
       .eq('facet_id', 'dix')
       .eq('is_deleted', false)
-      .is('reply_to_post_id', null)
+      .is('reply_to_id', null)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -593,7 +593,7 @@ router.get('/post/:id', async (req: Request, res: Response) => {
     const { data: replyData } = await supabase
       .from('dix_posts')
       .select('*')
-      .eq('reply_to_post_id', postId)
+      .eq('reply_to_id', postId)
       .eq('is_deleted', false)
       .order('created_at', { ascending: true })
       .limit(50);
