@@ -212,6 +212,7 @@ async function transformPosts(dbPosts: any[]): Promise<WebPost[]> {
  * POST /web/dix/publish
  * Publish a new DIX post
  */
+// Direct insert to dix_posts table (NOT RPC!)
 router.post('/publish', async (req: Request, res: Response) => {
   try {
     const {
@@ -228,29 +229,53 @@ router.post('/publish', async (req: Request, res: Response) => {
       reply_to_id
     } = req.body;
 
-    // Call Supabase RPC
-    const { data, error } = await supabase.rpc('publish_dix_post', {
-      p_id: post_id,
-      p_facet_id: facet_id,
-      p_author_public_key: author_public_key,
-      p_author_handle: author_handle,
-      p_content: content,
-      p_media: media,
-      p_created_at: created_at,
-      p_tags: tags,
-      p_mentions: mentions,
-      p_signature: signature,
-      p_reply_to_post_id: reply_to_id || null,
-      p_location_name: null,
-      p_visibility: 'public'
-    });
+    // Direct insert to dix_posts table (NOT RPC!)
+    const { data, error } = await supabase.from('dix_posts').insert({
+      id: post_id,
+      facet_id: facet_id || 'dix',
+      author_public_key: author_public_key,
+      author_handle: author_handle,
+      content: content,
+      media: media || [],
+      tags: tags || [],
+      mentions: mentions || [],
+      signature: signature,
+      created_at: created_at || new Date().toISOString(),
+      reply_to_post_id: reply_to_id || null,
+      visibility: 'public',
+      is_deleted: false,
+    }).select().single();
 
     if (error) {
-      console.error('RPC publish_dix_post error:', error);
+      console.error('DIX insert error:', error);
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    return res.json({ success: true, data });
+    // If this is a reply, increment reply_count on parent
+    if (reply_to_id) {
+      const { data: parent } = await supabase
+        .from('dix_posts')
+        .select('reply_count')
+        .eq('id', reply_to_id)
+        .single();
+
+      if (parent) {
+        await supabase
+          .from('dix_posts')
+          .update({ reply_count: (parent.reply_count || 0) + 1 })
+          .eq('id', reply_to_id);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        message: 'Post published successfully',
+        post_id: data.id,
+        success: true,
+        network_post_id: data.id
+      }
+    });
   } catch (error) {
     console.error('POST /web/dix/publish error:', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
@@ -269,45 +294,16 @@ router.post('/like', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
-    // Check if already liked
-    const { data: existing } = await supabase
-      .from('dix_likes')
-      .select('id')
-      .eq('post_id', post_id)
-      .eq('author_public_key', author_public_key)
-      .single();
+    // Call Supabase RPC
+    const { error: rpcError } = await supabase.rpc('like_dix_post', {
+      p_post_id: post_id,
+      p_author_public_key: author_public_key,
+      p_signature: signature
+    });
 
-    if (existing) {
-      return res.json({ success: true, message: 'Already liked' });
-    }
-
-    // Insert like
-    const { error: insertError } = await supabase
-      .from('dix_likes')
-      .insert({
-        post_id,
-        author_public_key,
-        signature, // Optional if schema has it
-        created_at: new Date().toISOString()
-      });
-
-    if (insertError) {
-      console.error('Like insert error:', insertError);
-      // Fallback: maybe table is 'likes'?
-      return res.status(500).json({ success: false, error: insertError.message });
-    }
-
-    // Increment count (fire and forget / robust enough)
-    // We can't do atomic increment easily without RPC, so we fetch-add-update or assume eventual consistency
-    // Actually, calling an RPC for decrement/increment is better if available.
-    // For now, let's just insert. The count is usually a calculated field or updated via Trigger.
-    // DOES `dix_posts` have a trigger? The `publish` fix manually set counts.
-    // I'll manually increment `like_count`.
-
-    // Fetch current
-    const { data: post } = await supabase.from('dix_posts').select('like_count').eq('id', post_id).single();
-    if (post) {
-      await supabase.from('dix_posts').update({ like_count: (post.like_count || 0) + 1 }).eq('id', post_id);
+    if (rpcError) {
+      console.error('RPC like_dix_post error:', rpcError);
+      return res.status(500).json({ success: false, error: rpcError.message });
     }
 
     return res.json({ success: true });
@@ -325,41 +321,17 @@ router.post('/repost', async (req: Request, res: Response) => {
   try {
     const { post_id, author_public_key, signature } = req.body;
 
-    // Insert repost as a new post with 'repost_of' ?? 
-    // Or inserts into 'dix_reposts'?
-    // The `publish` payload had `reply_to_id`, maybe `repost_of` is similar?
-    // Let's assume for now Repost is just a counter + entry in `dix_reposts`.
+    // Call Supabase RPC
+    const { error: rpcError } = await supabase.rpc('repost_dix_post', {
+      p_post_id: post_id,
+      p_author_public_key: author_public_key,
+      p_signature: signature
+    });
 
-    // Check if already reposted
-    const { data: existing } = await supabase
-      .from('dix_reposts')
-      .select('id')
-      .eq('post_id', post_id)
-      .eq('author_public_key', author_public_key)
-      .single();
-
-    if (existing) {
-      return res.json({ success: true, message: 'Already reposted' });
-    }
-
-    const { error: insertError } = await supabase
-      .from('dix_reposts')
-      .insert({
-        post_id,
-        author_public_key,
-        signature,
-        created_at: new Date().toISOString()
-      });
-
-    if (insertError) {
-      console.error('Repost insert error:', insertError);
-      return res.status(500).json({ success: false, error: insertError.message });
-    }
-
-    // Increment count
-    const { data: post } = await supabase.from('dix_posts').select('repost_count').eq('id', post_id).single();
-    if (post) {
-      await supabase.from('dix_posts').update({ repost_count: (post.repost_count || 0) + 1 }).eq('id', post_id);
+    if (rpcError) {
+      console.error('RPC repost_dix_post error:', rpcError);
+      // If RPC missing, fallback? No, assume RPC exists if enforcing signatures.
+      return res.status(500).json({ success: false, error: rpcError.message });
     }
 
     return res.json({ success: true });
