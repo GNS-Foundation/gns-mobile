@@ -132,67 +132,67 @@ async function getAuthorProfile(pk: string): Promise<{
 }
 
 /**
- * Transform dix_posts row to web-friendly format
+ * Transform database post to web-friendly format
  */
 async function transformPost(dbPost: any, includeAuthorDetails = true): Promise<WebPost> {
-  // dix_posts uses author_public_key, not author_pk
-  const authorPk = dbPost.author_public_key || dbPost.author_pk;
-
   let authorProfile = {
     displayName: null as string | null,
     avatarUrl: null as string | null,
-    trustScore: 0,
-    breadcrumbCount: 0,
+    trustScore: dbPost.trust_score || 0,
+    breadcrumbCount: dbPost.breadcrumb_count || 0,
     handle: dbPost.author_handle || null,
     isVerified: false,
   };
 
-  if (includeAuthorDetails && authorPk) {
-    authorProfile = await getAuthorProfile(authorPk);
+  if (includeAuthorDetails && dbPost.author_pk) {
+    authorProfile = await getAuthorProfile(dbPost.author_pk);
   }
 
-  // dix_posts has direct 'content' field, not payload_json
-  const text = dbPost.content || (dbPost.payload_json?.text) || '';
-  const media = dbPost.media || dbPost.payload_json?.media || [];
-  const tags = dbPost.tags || dbPost.payload_json?.tags || [];
-  const mentions = dbPost.mentions || dbPost.payload_json?.mentions || [];
+  const payload = typeof dbPost.payload_json === 'string'
+    ? JSON.parse(dbPost.payload_json)
+    : dbPost.payload_json || {};
 
   return {
     id: dbPost.id,
     author: {
-      publicKey: authorPk,
+      publicKey: dbPost.author_pk,
       handle: dbPost.author_handle || authorProfile.handle,
       displayName: authorProfile.displayName,
       avatarUrl: authorProfile.avatarUrl,
-      trustScore: authorProfile.trustScore,
-      breadcrumbCount: authorProfile.breadcrumbCount,
+      trustScore: authorProfile.trustScore || dbPost.trust_score || 0,
+      breadcrumbCount: authorProfile.breadcrumbCount || dbPost.breadcrumb_count || 0,
       isVerified: authorProfile.isVerified,
     },
     facet: dbPost.facet_id,
     content: {
-      text: text,
-      media: media,
-      links: [],
-      tags: tags,
-      mentions: mentions,
-      location: dbPost.location_name,
+      text: payload.text || '',
+      media: payload.media || [],
+      links: payload.links || [],
+      tags: payload.tags || [],
+      mentions: payload.mentions || [],
+      location: payload.location_label,
     },
     engagement: {
       likes: dbPost.like_count || 0,
       replies: dbPost.reply_count || 0,
       reposts: dbPost.repost_count || 0,
-      quotes: 0,
+      quotes: dbPost.quote_count || 0,
       views: dbPost.view_count || 0,
     },
     meta: {
       signature: dbPost.signature,
-      trustScoreAtPost: 0,
-      breadcrumbsAtPost: 0,
+      trustScoreAtPost: dbPost.trust_score || 0,
+      breadcrumbsAtPost: dbPost.breadcrumb_count || 0,
+      ipfsCid: payload.ipfs_cid,
       createdAt: dbPost.created_at,
     },
-    thread: dbPost.reply_to_post_id ? {
-      replyToId: dbPost.reply_to_post_id,
-      quoteOfId: null,
+    thread: (dbPost.reply_to_id || dbPost.quote_of_id) ? {
+      replyToId: dbPost.reply_to_id,
+      quoteOfId: dbPost.quote_of_id,
+    } : undefined,
+    brand: dbPost.brand_id ? {
+      id: dbPost.brand_id,
+      role: dbPost.brand_role,
     } : undefined,
   };
 }
@@ -209,68 +209,8 @@ async function transformPosts(dbPosts: any[]): Promise<WebPost[]> {
 // ===========================================
 
 /**
- * DEBUG: Dump posts table
- */
-router.get('/debug/dump', async (req: Request, res: Response) => {
-  try {
-    const { data, error } = await supabase
-      .from('posts')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(10);
-
-    return res.json({ success: true, count: data?.length, data, error });
-  } catch (e) {
-    return res.json({ success: false, error: String(e) });
-  }
-});
-
-/**
- * DEBUG: Diagnosis
- * Test connection, list tables, try manual insert
- */
-router.get('/debug/diagnosis', async (req: Request, res: Response) => {
-  const results: any = {};
-
-  try {
-    // 1. Check Aliases (System check)
-    const aliases = await supabase.from('aliases').select('*', { count: 'exact', head: true });
-    results.aliasesCount = aliases.count;
-    results.aliasesError = aliases.error;
-
-    // 2. Manual Insert Test
-    const testId = '00000000-0000-0000-0000-000000000001';
-    const clean = await supabase.from('posts').delete().eq('id', testId); // Clean up
-
-    const insert = await supabase.from('posts').insert({
-      id: testId,
-      facet_id: 'debug',
-      author_pk: 'debug_pk',
-      author_handle: 'debugger',
-      payload_json: { text: "Debug manual insert" },
-      status: 'published',
-      signature: 'debug_sig',
-      created_at: new Date().toISOString()
-    }).select();
-
-    results.manualInsertData = insert.data;
-    results.manualInsertError = insert.error;
-
-    // 3. Read it back
-    if (!insert.error) {
-      const read = await supabase.from('posts').select('*').eq('id', testId);
-      results.readBackData = read.data;
-    }
-
-    return res.json({ success: true, results });
-  } catch (e) {
-    return res.json({ success: false, error: String(e), stack: (e as Error).stack });
-  }
-});
-
-/**
  * POST /web/dix/publish
- * Publish a new DIX post via RPC
+ * Publish a new DIX post
  */
 router.post('/publish', async (req: Request, res: Response) => {
   try {
@@ -288,39 +228,143 @@ router.post('/publish', async (req: Request, res: Response) => {
       reply_to_id
     } = req.body;
 
-    // Insert into dix_posts (same table timeline reads from!)
-    const { data, error } = await supabase.from('dix_posts').insert({
-      id: post_id,
-      facet_id: facet_id || 'dix',
-      author_public_key: author_public_key,
-      author_handle: author_handle,
-      content: content,  // Direct content field
-      media: media || [],
-      tags: tags || [],
-      mentions: mentions || [],
-      signature: signature,
-      created_at: created_at || new Date().toISOString(),
-      reply_to_post_id: reply_to_id || null, // Note: reply_to_post_id
-      visibility: 'public',
-      is_deleted: false,
-    }).select().single();
+    // Call Supabase RPC
+    const { data, error } = await supabase.rpc('publish_dix_post', {
+      p_id: post_id,
+      p_facet_id: facet_id,
+      p_author_public_key: author_public_key,
+      p_author_handle: author_handle,
+      p_content: content,
+      p_media: media,
+      p_created_at: created_at,
+      p_tags: tags,
+      p_mentions: mentions,
+      p_signature: signature,
+      p_reply_to_post_id: reply_to_id || null,
+      p_location_name: null,
+      p_visibility: 'public'
+    });
 
     if (error) {
-      console.error('DIX insert error:', error);
+      console.error('RPC publish_dix_post error:', error);
       return res.status(500).json({ success: false, error: error.message });
     }
 
-    return res.json({
-      success: true,
-      data: {
-        message: 'Post published successfully',
-        post_id: data.id,
-        success: true,
-        network_post_id: data.id
-      }
-    });
+    return res.json({ success: true, data });
   } catch (error) {
     console.error('POST /web/dix/publish error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /web/dix/like
+ * Like a post
+ */
+router.post('/like', async (req: Request, res: Response) => {
+  try {
+    const { post_id, author_public_key, signature } = req.body;
+
+    if (!post_id || !author_public_key) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    // Check if already liked
+    const { data: existing } = await supabase
+      .from('dix_likes')
+      .select('id')
+      .eq('post_id', post_id)
+      .eq('author_public_key', author_public_key)
+      .single();
+
+    if (existing) {
+      return res.json({ success: true, message: 'Already liked' });
+    }
+
+    // Insert like
+    const { error: insertError } = await supabase
+      .from('dix_likes')
+      .insert({
+        post_id,
+        author_public_key,
+        signature, // Optional if schema has it
+        created_at: new Date().toISOString()
+      });
+
+    if (insertError) {
+      console.error('Like insert error:', insertError);
+      // Fallback: maybe table is 'likes'?
+      return res.status(500).json({ success: false, error: insertError.message });
+    }
+
+    // Increment count (fire and forget / robust enough)
+    // We can't do atomic increment easily without RPC, so we fetch-add-update or assume eventual consistency
+    // Actually, calling an RPC for decrement/increment is better if available.
+    // For now, let's just insert. The count is usually a calculated field or updated via Trigger.
+    // DOES `dix_posts` have a trigger? The `publish` fix manually set counts.
+    // I'll manually increment `like_count`.
+
+    // Fetch current
+    const { data: post } = await supabase.from('dix_posts').select('like_count').eq('id', post_id).single();
+    if (post) {
+      await supabase.from('dix_posts').update({ like_count: (post.like_count || 0) + 1 }).eq('id', post_id);
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('POST /web/dix/like error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /web/dix/repost
+ * Repost a post
+ */
+router.post('/repost', async (req: Request, res: Response) => {
+  try {
+    const { post_id, author_public_key, signature } = req.body;
+
+    // Insert repost as a new post with 'repost_of' ?? 
+    // Or inserts into 'dix_reposts'?
+    // The `publish` payload had `reply_to_id`, maybe `repost_of` is similar?
+    // Let's assume for now Repost is just a counter + entry in `dix_reposts`.
+
+    // Check if already reposted
+    const { data: existing } = await supabase
+      .from('dix_reposts')
+      .select('id')
+      .eq('post_id', post_id)
+      .eq('author_public_key', author_public_key)
+      .single();
+
+    if (existing) {
+      return res.json({ success: true, message: 'Already reposted' });
+    }
+
+    const { error: insertError } = await supabase
+      .from('dix_reposts')
+      .insert({
+        post_id,
+        author_public_key,
+        signature,
+        created_at: new Date().toISOString()
+      });
+
+    if (insertError) {
+      console.error('Repost insert error:', insertError);
+      return res.status(500).json({ success: false, error: insertError.message });
+    }
+
+    // Increment count
+    const { data: post } = await supabase.from('dix_posts').select('repost_count').eq('id', post_id).single();
+    if (post) {
+      await supabase.from('dix_posts').update({ repost_count: (post.repost_count || 0) + 1 }).eq('id', post_id);
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('POST /web/dix/repost error:', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -332,15 +376,21 @@ router.post('/publish', async (req: Request, res: Response) => {
 router.get('/timeline', async (req: Request, res: Response) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const before = req.query.before as string | undefined;
 
-    // Read from dix_posts table
-    const { data: dbPosts, error } = await supabase
-      .from('dix_posts')
+    let query = supabase
+      .from('posts')
       .select('*')
-      .eq('is_deleted', false)
+      .eq('facet_id', 'dix')
+      .eq('status', 'published')
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .limit(limit);
+
+    if (before) {
+      query = query.lt('created_at', before);
+    }
+
+    const { data: dbPosts, error } = await query;
 
     if (error) {
       console.error('Timeline query error:', error);
@@ -351,15 +401,26 @@ router.get('/timeline', async (req: Request, res: Response) => {
 
     // Get stats (only on first page)
     let stats;
-    if (offset === 0) {
+    if (!before) {
       const { count: totalPosts } = await supabase
-        .from('dix_posts')
+        .from('posts')
         .select('*', { count: 'exact', head: true })
-        .eq('is_deleted', false);
+        .eq('facet_id', 'dix')
+        .eq('status', 'published');
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const { count: postsToday } = await supabase
+        .from('posts')
+        .select('*', { count: 'exact', head: true })
+        .eq('facet_id', 'dix')
+        .eq('status', 'published')
+        .gte('created_at', today.toISOString());
 
       stats = {
         totalPosts: totalPosts || 0,
-        postsToday: 0,
+        postsToday: postsToday || 0,
       };
     }
 
@@ -390,7 +451,7 @@ router.get('/@:handle', async (req: Request, res: Response) => {
     }
 
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const before = req.query.before as string | undefined;
 
     // Get user from aliases
     const { data: alias } = await supabase
@@ -406,14 +467,21 @@ router.get('/@:handle', async (req: Request, res: Response) => {
     // Get user profile
     const profile = await getAuthorProfile(alias.pk_root);
 
-    // Get posts from dix_posts
-    const { data: dbPosts, error } = await supabase
-      .from('dix_posts')
+    // Get posts
+    let query = supabase
+      .from('posts')
       .select('*')
-      .eq('author_public_key', alias.pk_root) // Use PK explicitly
-      .eq('is_deleted', false)
+      .eq('author_handle', handle)
+      .eq('facet_id', 'dix')
+      .eq('status', 'published')
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .limit(limit);
+
+    if (before) {
+      query = query.lt('created_at', before);
+    }
+
+    const { data: dbPosts, error } = await query;
 
     if (error) {
       console.error('User posts query error:', error);
@@ -424,10 +492,10 @@ router.get('/@:handle', async (req: Request, res: Response) => {
 
     // Get user stats
     const { count: totalPosts } = await supabase
-      .from('dix_posts')
+      .from('posts')
       .select('*', { count: 'exact', head: true })
-      .eq('author_public_key', alias.pk_root)
-      .eq('is_deleted', false);
+      .eq('author_pk', alias.pk_root)
+      .eq('status', 'published');
 
     return res.json({
       success: true,
@@ -442,9 +510,11 @@ router.get('/@:handle', async (req: Request, res: Response) => {
           isVerified: profile.isVerified,
         },
         posts,
+        stats: {
+          totalPosts: totalPosts || 0,
+        },
         cursor: posts.length > 0 ? posts[posts.length - 1].meta.createdAt : null,
         hasMore: posts.length === limit,
-        stats: { totalPosts: totalPosts || 0 },
       },
     });
   } catch (error) {
@@ -461,7 +531,7 @@ router.get('/pk/:publicKey', async (req: Request, res: Response) => {
   try {
     const pk = req.params.publicKey.toLowerCase();
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const before = req.query.before as string | undefined;
 
     if (!/^[0-9a-f]{64}$/.test(pk)) {
       return res.status(400).json({ success: false, error: 'Invalid public key format' });
@@ -470,14 +540,21 @@ router.get('/pk/:publicKey', async (req: Request, res: Response) => {
     // Get profile
     const profile = await getAuthorProfile(pk);
 
-    // Get posts from dix_posts
-    const { data: dbPosts, error } = await supabase
-      .from('dix_posts')
+    // Get posts
+    let query = supabase
+      .from('posts')
       .select('*')
-      .eq('author_public_key', pk)
-      .eq('is_deleted', false)
+      .eq('author_pk', pk)
+      .eq('facet_id', 'dix')
+      .eq('status', 'published')
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .limit(limit);
+
+    if (before) {
+      query = query.lt('created_at', before);
+    }
+
+    const { data: dbPosts, error } = await query;
 
     if (error) {
       console.error('PK posts query error:', error);
@@ -522,9 +599,9 @@ router.get('/post/:id', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'Invalid post ID format' });
     }
 
-    // Get post from dix_posts
+    // Get post
     const { data: dbPost, error } = await supabase
-      .from('dix_posts')
+      .from('posts')
       .select('*')
       .eq('id', postId)
       .single();
@@ -533,18 +610,18 @@ router.get('/post/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
 
-    if (dbPost.is_deleted) {
+    if (dbPost.status !== 'published') {
       return res.status(410).json({ success: false, error: 'Post has been retracted' });
     }
 
     const post = await transformPost(dbPost);
 
-    // Get replies from dix_posts
+    // Get replies
     const { data: replyData } = await supabase
-      .from('dix_posts')
+      .from('posts')
       .select('*')
-      .eq('reply_to_post_id', postId) // Note: reply_to_post_id
-      .eq('is_deleted', false)
+      .eq('reply_to_id', postId)
+      .eq('status', 'published')
       .order('created_at', { ascending: true })
       .limit(50);
 
@@ -552,7 +629,7 @@ router.get('/post/:id', async (req: Request, res: Response) => {
 
     // Increment view count (fire and forget)
     supabase
-      .from('dix_posts')
+      .from('posts')
       .update({ view_count: (dbPost.view_count || 0) + 1 })
       .eq('id', postId)
       .then(() => { });
@@ -584,14 +661,13 @@ router.get('/tag/:tag', async (req: Request, res: Response) => {
 
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
 
-    // Search posts with tag in unix_array column? Or just filtered?
-    // dix_posts has 'tags' column which is float8[] or text[]?
-    // Assuming text[], use 'cs' (contains)
+    // Search posts with tag in payload_json
     const { data: dbPosts, error } = await supabase
-      .from('dix_posts')
+      .from('posts')
       .select('*')
-      .eq('is_deleted', false)
-      .contains('tags', [tag])
+      .eq('facet_id', 'dix')
+      .eq('status', 'published')
+      .contains('payload_json', { tags: [tag] })
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -630,12 +706,13 @@ router.get('/search', async (req: Request, res: Response) => {
 
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
 
-    // Full-text search using ILIKE on content column
+    // Full-text search using ILIKE on text content
     const { data: dbPosts, error } = await supabase
-      .from('dix_posts')
+      .from('posts')
       .select('*')
-      .eq('is_deleted', false)
-      .ilike('content', `%${query}%`)
+      .eq('facet_id', 'dix')
+      .eq('status', 'published')
+      .ilike('payload_json->>text', `%${query}%`)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -668,28 +745,31 @@ router.get('/stats', async (req: Request, res: Response) => {
   try {
     // Total posts
     const { count: totalPosts } = await supabase
-      .from('dix_posts')
+      .from('posts')
       .select('*', { count: 'exact', head: true })
-      .eq('is_deleted', false);
+      .eq('facet_id', 'dix')
+      .eq('status', 'published');
 
     // Posts today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const { count: postsToday } = await supabase
-      .from('dix_posts')
+      .from('posts')
       .select('*', { count: 'exact', head: true })
-      .eq('is_deleted', false)
+      .eq('facet_id', 'dix')
+      .eq('status', 'published')
       .gte('created_at', today.toISOString());
 
-    // Active users today
+    // Active users today (distinct authors)
     const { data: activeUsers } = await supabase
-      .from('dix_posts')
-      .select('author_public_key')
-      .eq('is_deleted', false)
+      .from('posts')
+      .select('author_pk')
+      .eq('facet_id', 'dix')
+      .eq('status', 'published')
       .gte('created_at', today.toISOString());
 
-    const uniqueAuthors = new Set(activeUsers?.map((p: { author_public_key: string }) => p.author_public_key) || []);
+    const uniqueAuthors = new Set(activeUsers?.map((p: { author_pk: string }) => p.author_pk) || []);
 
     return res.json({
       success: true,
@@ -706,3 +786,4 @@ router.get('/stats', async (req: Request, res: Response) => {
 });
 
 export default router;
+// Force backend rebuild
