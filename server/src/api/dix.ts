@@ -226,9 +226,47 @@ router.get('/debug/dump', async (req: Request, res: Response) => {
 });
 
 /**
- * POST /web/dix/publish
- * Publish a new DIX post
+ * DEBUG: Diagnosis
+ * Test connection, list tables, try manual insert
  */
+router.get('/debug/diagnosis', async (req: Request, res: Response) => {
+  const results: any = {};
+
+  try {
+    // 1. Check Aliases (System check)
+    const aliases = await supabase.from('aliases').select('*', { count: 'exact', head: true });
+    results.aliasesCount = aliases.count;
+    results.aliasesError = aliases.error;
+
+    // 2. Manual Insert Test
+    const testId = '00000000-0000-0000-0000-000000000001';
+    const clean = await supabase.from('posts').delete().eq('id', testId); // Clean up
+
+    const insert = await supabase.from('posts').insert({
+      id: testId,
+      facet_id: 'debug',
+      author_pk: 'debug_pk',
+      author_handle: 'debugger',
+      payload_json: { text: "Debug manual insert" },
+      status: 'published',
+      signature: 'debug_sig',
+      created_at: new Date().toISOString()
+    }).select();
+
+    results.manualInsertData = insert.data;
+    results.manualInsertError = insert.error;
+
+    // 3. Read it back
+    if (!insert.error) {
+      const read = await supabase.from('posts').select('*').eq('id', testId);
+      results.readBackData = read.data;
+    }
+
+    return res.json({ success: true, results });
+  } catch (e) {
+    return res.json({ success: false, error: String(e), stack: (e as Error).stack });
+  }
+});
 router.post('/publish', async (req: Request, res: Response) => {
   try {
     const {
