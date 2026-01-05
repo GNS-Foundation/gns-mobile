@@ -327,56 +327,83 @@ router.post('/publish', async (req: Request, res: Response) => {
  * GET /web/dix/timeline
  * Public DIX timeline
  */
+// ===========================================
+// ROUTES
+// ===========================================
+
+/**
+ * DEBUG: Dump posts table
+ */
+router.get('/debug/dump', async (req: Request, res: Response) => {
+  try {
+    const { data, error } = await supabase
+      .from('dix_posts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    return res.json({ success: true, count: data?.length, data, error });
+  } catch (e) {
+    return res.json({ success: false, error: String(e) });
+  }
+});
+/**
+ * GET /web/dix/timeline
+ * Public DIX timeline
+ */
 router.get('/timeline', async (req: Request, res: Response) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
-    const before = req.query.before as string | undefined;
+    const offset = parseInt(req.query.offset as string) || 0;
 
-    let query = supabase
-      .from('posts')
+    // Read from dix_posts table (where posts actually are!)
+    const { data: dbPosts, error } = await supabase
+      .from('dix_posts')  // ✅ CORRECT TABLE
       .select('*')
-      .eq('facet_id', 'dix')
-      // .eq('status', 'published') // Temporarily disabled for debugging
+      .eq('is_deleted', false)
       .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (before) {
-      query = query.lt('created_at', before);
-    }
-
-    const { data: dbPosts, error } = await query;
+      .range(offset, offset + limit - 1);
 
     if (error) {
       console.error('Timeline query error:', error);
       return res.status(500).json({ success: false, error: 'Database error' });
     }
 
-    const posts = await transformPosts(dbPosts || []);
-
-    // Get stats (only on first page)
-    let stats;
-    if (!before) {
-      const { count: totalPosts } = await supabase
-        .from('posts')
-        .select('*', { count: 'exact', head: true })
-        .eq('facet_id', 'dix')
-        .eq('status', 'published');
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      const { count: postsToday } = await supabase
-        .from('posts')
-        .select('*', { count: 'exact', head: true })
-        .eq('facet_id', 'dix')
-        .eq('status', 'published')
-        .gte('created_at', today.toISOString());
-
-      stats = {
-        totalPosts: totalPosts || 0,
-        postsToday: postsToday || 0,
-      };
-    }
+    // Map dix_posts columns to WebPost format
+    const posts = (dbPosts || []).map(p => ({
+      id: p.id,
+      author: {
+        publicKey: p.author_public_key,  // dix_posts uses author_public_key
+        handle: p.author_handle,
+        displayName: p.author_handle,
+        avatarUrl: null,
+        trustScore: 0,
+        breadcrumbCount: 0,
+        isVerified: !!p.author_handle,
+      },
+      facet: p.facet_id,
+      content: {
+        text: p.content,  // dix_posts uses content, not payload_json
+        media: p.media || [],
+        links: [],
+        tags: p.tags || [],
+        mentions: p.mentions || [],
+        location: p.location_name,
+      },
+      engagement: {
+        likes: p.like_count || 0,
+        replies: p.reply_count || 0,
+        reposts: p.repost_count || 0,
+        quotes: 0,
+        views: p.view_count || 0,
+      },
+      meta: {
+        signature: p.signature,
+        trustScoreAtPost: 0,
+        breadcrumbsAtPost: 0,
+        createdAt: p.created_at,
+      },
+    }));
 
     return res.json({
       success: true,
@@ -384,7 +411,7 @@ router.get('/timeline', async (req: Request, res: Response) => {
         posts,
         cursor: posts.length > 0 ? posts[posts.length - 1].meta.createdAt : null,
         hasMore: posts.length === limit,
-        stats,
+        stats: { totalPosts: dbPosts?.length || 0, postsToday: 0 },
       },
     });
   } catch (error) {
