@@ -224,21 +224,25 @@ router.post('/publish', async (req: Request, res: Response) => {
       created_at,
       tags,
       mentions,
-      signature
+      signature,
+      reply_to_id
     } = req.body;
 
     // Call Supabase RPC
     const { data, error } = await supabase.rpc('publish_dix_post', {
-      p_post_id: post_id,
+      p_id: post_id,
       p_facet_id: facet_id,
-      p_author_pk: author_public_key,
+      p_author_public_key: author_public_key,
       p_author_handle: author_handle,
       p_content: content,
       p_media: media,
       p_created_at: created_at,
       p_tags: tags,
       p_mentions: mentions,
-      p_signature: signature
+      p_signature: signature,
+      p_reply_to_post_id: reply_to_id || null,
+      p_location_name: null,
+      p_visibility: 'public'
     });
 
     if (error) {
