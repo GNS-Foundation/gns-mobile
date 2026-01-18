@@ -51,7 +51,7 @@ async function checkDnsTxt(domain: string, code: string): Promise<boolean> {
     domain,
     `gns-verify.${domain}`,
   ];
-  
+
   for (const checkDomain of domainsToCheck) {
     try {
       const records = await resolveTxt(checkDomain);
@@ -66,7 +66,7 @@ async function checkDnsTxt(domain: string, code: string): Promise<boolean> {
       // Try next domain
     }
   }
-  
+
   console.log(`[DNS] ✗ Code not found for ${domain}`);
   return false;
 }
@@ -141,7 +141,7 @@ router.get('/check/:namespace', async (req: Request, res: Response) => {
 
     // Check pending registrations
     const { data: pending } = await supabase
-      .from('namespace_registrations')
+      .from('org_registrations')
       .select('namespace, status')
       .eq('namespace', namespace)
       .neq('status', 'suspended')
@@ -199,13 +199,13 @@ router.post('/register', async (req: Request, res: Response) => {
     }
 
     const cleanNamespace = namespace.toLowerCase().replace(/[^a-z0-9]/g, '');
-    
+
     // Need either domain or website
     let cleanDomain = domain;
     if (!cleanDomain && website) {
       cleanDomain = extractDomain(website);
     }
-    
+
     if (!cleanDomain) {
       return res.status(400).json({
         success: false,
@@ -243,7 +243,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Upsert registration
     const { data, error } = await supabase
-      .from('namespace_registrations')
+      .from('org_registrations')
       .upsert({
         namespace: cleanNamespace,
         organization_name,
@@ -307,14 +307,14 @@ router.post('/verify', async (req: Request, res: Response) => {
     const supabase = db.getSupabase();
 
     // Get registration
-    let query = supabase.from('namespace_registrations').select('*');
-    
+    let query = supabase.from('org_registrations').select('*');
+
     if (registration_id) {
       query = query.eq('id', registration_id);
     } else {
       query = query.eq('domain', domain);
     }
-    
+
     const { data: reg, error } = await query.single();
 
     if (error || !reg) {
@@ -348,7 +348,7 @@ router.post('/verify', async (req: Request, res: Response) => {
 
     // Mark verified
     await supabase
-      .from('namespace_registrations')
+      .from('org_registrations')
       .update({
         verified: true,
         verified_at: new Date().toISOString(),
@@ -387,7 +387,7 @@ router.get('/status/:id', async (req: Request, res: Response) => {
     const supabase = db.getSupabase();
 
     const { data: reg } = await supabase
-      .from('namespace_registrations')
+      .from('org_registrations')
       .select('*')
       .eq('id', id)
       .single();
@@ -458,7 +458,7 @@ router.post('/:namespace/activate', async (req: Request, res: Response) => {
 
     // Get registration
     const { data: reg } = await supabase
-      .from('namespace_registrations')
+      .from('org_registrations')
       .select('*')
       .eq('namespace', namespace)
       .eq('email', email)
@@ -504,7 +504,7 @@ router.post('/:namespace/activate', async (req: Request, res: Response) => {
 
     // Update registration
     await supabase
-      .from('namespace_registrations')
+      .from('org_registrations')
       .update({ status: 'active', admin_pk })
       .eq('id', reg.id);
 
