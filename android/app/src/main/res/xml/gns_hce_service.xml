@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/hce_service_description"
+    android:requireDeviceUnlock="true"
+    android:apduServiceBanner="@drawable/gns_pay_banner">
+    
+    <!-- GNS Pay Application ID -->
+    <aid-group
+        android:category="payment"
+        android:description="@string/gns_pay_description">
+        
+        <!-- Primary GNS AID: F0 47 4E 53 50 41 59 -->
+        <aid-filter android:name="F0474E53504159"/>
+        
+    </aid-group>
+    
+</host-apdu-service>

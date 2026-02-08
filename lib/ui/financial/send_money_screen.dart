@@ -589,8 +589,8 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
     setState(() => _isSending = true);
     
     try {
-      // ✅ GNS tokens go through Stellar network
-      if (_selectedCurrency == 'GNS') {
+      // GNS, USD, EUR go through Stellar network
+      if (_selectedCurrency == 'GNS' || _selectedCurrency == 'USD' || _selectedCurrency == 'EUR') {
         if (_wallet == null) {
           setState(() {
             _isSending = false;
@@ -603,13 +603,8 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
           return;
         }
         
-        // Get sender's Stellar address from GNS key
         final senderStellarKey = _stellarService.gnsKeyToStellar(_wallet!.publicKey!);
-        
-        // Get private key bytes for signing
         final privateKeyBytes = _wallet!.privateKeyBytes!;
-        
-        // Parse amount
         final amount = double.tryParse(_amountController.text) ?? 0.0;
         
         if (amount <= 0) {
@@ -624,13 +619,30 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
           return;
         }
         
-        // Send GNS via Stellar! 🚀
-        final result = await _stellarService.sendGnsToGnsKey(
-          senderStellarPublicKey: senderStellarKey,
-          senderPrivateKeyBytes: privateKeyBytes,
-          recipientGnsPublicKey: _recipientPk!,
-          amount: amount,
-        );
+        // Convert recipient GNS key to Stellar address
+        final recipientStellarKey = _stellarService.gnsKeyToStellar(_recipientPk!);
+        
+        TransactionResult result;
+        
+        if (_selectedCurrency == 'GNS') {
+          result = await _stellarService.sendGns(
+            senderStellarPublicKey: senderStellarKey,
+            senderPrivateKeyBytes: privateKeyBytes,
+            recipientStellarPublicKey: recipientStellarKey,
+            amount: amount,
+          );
+        } else {
+          // Send USDC or EURC via Stellar!
+          final coin = _selectedCurrency == 'USD' ? Stablecoin.usdc : Stablecoin.eurc;
+          result = await _stellarService.sendStablecoin(
+            senderStellarPublicKey: senderStellarKey,
+            senderPrivateKeyBytes: privateKeyBytes,
+            recipientStellarPublicKey: recipientStellarKey,
+            amount: amount,
+            coin: coin,
+            memo: _memoController.text.isEmpty ? null : _memoController.text,
+          );
+        }
         
         setState(() {
           _isSending = false;

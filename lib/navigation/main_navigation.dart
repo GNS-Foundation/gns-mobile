@@ -11,6 +11,8 @@ import '../core/gns/identity_wallet.dart';
 import '../core/profile/profile_service.dart';
 import '../core/financial/payment_service.dart';
 import '../core/theme/theme_service.dart';
+import '../core/calls/call_service.dart';
+import '../core/calls/call_screen.dart';
 import '../ui/home/home_tab.dart';
 import '../ui/contacts/contacts_tab.dart';
 import '../ui/settings/settings_tab.dart';
@@ -39,16 +41,29 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   PaymentService? _paymentService;
   StreamSubscription? _incomingPaymentSub;
+  StreamSubscription? _incomingCallSub;
 
   @override
   void initState() {
     super.initState();
+    super.initState();
     _initPayments();
+    
+    // ✅ Global Call Listener
+    _incomingCallSub = CallService().callStream.listen((info) {
+      if (mounted && info.state == CallState.incomingRinging) {
+        CallScreen.show(
+          context,
+          isIncoming: true,
+        );
+      }
+    });
   }
 
   @override
   void dispose() {
     _incomingPaymentSub?.cancel();
+    _incomingCallSub?.cancel();
     super.dispose();
   }
 

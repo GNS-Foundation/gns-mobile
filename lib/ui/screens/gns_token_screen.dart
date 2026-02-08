@@ -1,7 +1,8 @@
 // ===========================================
-// GNS Token Screen - View and Claim GNS Tokens (v2)
+// GNS Token Screen - View and Claim Tokens (v3)
 // ===========================================
 // Full claim functionality with transaction signing
+// v3: Added USDC/EURC balance display and claiming
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -23,8 +24,17 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
   bool _claiming = false;
   bool _accountExists = false;
   bool _hasTrustline = false;
+  
+  // Balances
   double _gnsBalance = 0.0;
   double _xlmBalance = 0.0;
+  double _usdcBalance = 0.0;
+  double _eurcBalance = 0.0;
+  
+  // Trustline status
+  bool _hasUsdcTrustline = false;
+  bool _hasEurcTrustline = false;
+  
   List<ClaimableBalance> _claimableBalances = [];
   String? _stellarAddress;
   String? _error;
@@ -64,23 +74,32 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
         final balances = await _stellar.getBalances(_stellarAddress!);
         
         _hasTrustline = false;
+        _hasUsdcTrustline = false;
+        _hasEurcTrustline = false;
         _gnsBalance = 0.0;
         _xlmBalance = 0.0;
+        _usdcBalance = 0.0;
+        _eurcBalance = 0.0;
         
         for (final balance in balances) {
           if (balance.isNative) {
             _xlmBalance = balance.amount;
-          } else if (balance.assetCode == StellarConfig.gnsTokenCode &&
-                     balance.assetIssuer == StellarConfig.gnsIssuerPublic) {
+          } else if (balance.isGns) {
             _gnsBalance = balance.amount;
             _hasTrustline = true;
+          } else if (balance.isUsdc) {
+            _usdcBalance = balance.amount;
+            _hasUsdcTrustline = true;
+          } else if (balance.isEurc) {
+            _eurcBalance = balance.amount;
+            _hasEurcTrustline = true;
           }
         }
       }
 
-      // Get claimable balances (works even without account)
+      // Get ALL claimable balances (GNS, USDC, EURC)
       if (_stellarAddress != null) {
-        _claimableBalances = await _stellar.getGnsClaimableBalances(_stellarAddress!);
+        _claimableBalances = await _stellar.getClaimableBalances(_stellarAddress!);
         debugPrint('Claimable balances: ${_claimableBalances.length}');
       }
 
@@ -154,6 +173,18 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
     setState(() => _claiming = true);
 
     try {
+      // First create any missing trustlines
+      debugPrint('🔐 Ensuring payment trustlines exist...');
+      final trustResult = await _stellar.createAllPaymentTrustlines(
+        stellarPublicKey: _stellarAddress!,
+        privateKeyBytes: privateKey,
+      );
+      
+      if (!trustResult.success && !trustResult.hash!.contains('already exist')) {
+        debugPrint('⚠️ Trustline warning: ${trustResult.error}');
+      }
+      
+      // Then claim all balances
       final result = await _stellar.claimAllGnsTokens(
         stellarPublicKey: _stellarAddress!,
         privateKeyBytes: privateKey,
@@ -301,18 +332,22 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    _accountExists ? 'Active' : 'Not Funded',
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    _accountExists ? 'Active' : 'Inactive',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            const Text(
-              'Same key as your GNS identity!',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
             const SizedBox(height: 8),
+            Text(
+              'Same key as your GNS identity!',
+              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+            ),
+            const SizedBox(height: 12),
             InkWell(
               onTap: _copyAddress,
               child: Container(
@@ -358,113 +393,140 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
             const SizedBox(height: 16),
             
             // GNS Balance
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF4CAF50), Color(0xFF2196F3)],
-                    ),
-                    borderRadius: BorderRadius.circular(24),
+            _buildBalanceRow(
+              icon: Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF4CAF50), Color(0xFF2196F3)],
                   ),
-                  child: const Center(
-                    child: Text(
-                      'G',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 24,
-                      ),
-                    ),
-                  ),
+                  borderRadius: BorderRadius.circular(24),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'GNS',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                      ),
-                      Text(
-                        _hasTrustline ? 'GNS Token' : 'No trustline',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                      ),
-                    ],
-                  ),
+                child: const Center(
+                  child: Text('G', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24)),
                 ),
-                Text(
-                  _gnsBalance.toStringAsFixed(2),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
+              ),
+              code: 'GNS',
+              name: _hasTrustline ? 'GNS Token' : 'No trustline',
+              balance: _gnsBalance,
             ),
             
             const Divider(height: 32),
             
             // XLM Balance
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: const Center(
-                    child: Text(
-                      'XLM',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
+            _buildBalanceRow(
+              icon: Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(24),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'XLM',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                      ),
-                      Text(
-                        'Stellar Lumens',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                      ),
-                    ],
-                  ),
+                child: const Center(
+                  child: Text('XLM', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
                 ),
-                Text(
-                  _xlmBalance.toStringAsFixed(2),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+              ),
+              code: 'XLM',
+              name: 'Stellar Lumens',
+              balance: _xlmBalance,
+            ),
+            
+            const Divider(height: 32),
+            
+            // USDC Balance
+            _buildBalanceRow(
+              icon: Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2775CA),
+                  borderRadius: BorderRadius.circular(24),
                 ),
-              ],
+                child: const Center(
+                  child: Text('\$', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24)),
+                ),
+              ),
+              code: 'USDC',
+              name: _hasUsdcTrustline ? 'USD Coin' : 'No trustline',
+              balance: _usdcBalance,
+              symbol: '\$',
+            ),
+            
+            const Divider(height: 32),
+            
+            // EURC Balance
+            _buildBalanceRow(
+              icon: Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1434CB),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: const Center(
+                  child: Text('€', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24)),
+                ),
+              ),
+              code: 'EURC',
+              name: _hasEurcTrustline ? 'Euro Coin' : 'No trustline',
+              balance: _eurcBalance,
+              symbol: '€',
             ),
           ],
         ),
       ),
     );
   }
+  
+  Widget _buildBalanceRow({
+    required Widget icon,
+    required String code,
+    required String name,
+    required double balance,
+    String? symbol,
+  }) {
+    return Row(
+      children: [
+        icon,
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(code, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text(name, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+            ],
+          ),
+        ),
+        Text(
+          symbol != null ? '$symbol${balance.toStringAsFixed(2)}' : balance.toStringAsFixed(2),
+          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+        ),
+      ],
+    );
+  }
 
   Widget _buildClaimableCard() {
-    final totalClaimable = _claimableBalances.fold<double>(
-      0.0,
-      (sum, cb) => sum + (double.tryParse(cb.amount) ?? 0),
-    );
+    // Group claimable balances by asset
+    final Map<String, double> claimableByAsset = {};
+    for (final cb in _claimableBalances) {
+      final key = cb.assetCode;
+      claimableByAsset[key] = (claimableByAsset[key] ?? 0) + (double.tryParse(cb.amount) ?? 0);
+    }
+    
+    // Build summary string
+    final summaryParts = <String>[];
+    claimableByAsset.forEach((code, amount) {
+      if (code == 'USDC') {
+        summaryParts.add('\$${amount.toStringAsFixed(2)}');
+      } else if (code == 'EURC') {
+        summaryParts.add('€${amount.toStringAsFixed(2)}');
+      } else {
+        summaryParts.add('${amount.toStringAsFixed(0)} $code');
+      }
+    });
+    final summaryText = summaryParts.join(' + ');
 
     return Card(
       color: Colors.amber[50],
@@ -477,11 +539,12 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
               children: [
                 const Icon(Icons.card_giftcard, color: Colors.amber),
                 const SizedBox(width: 8),
-                const Text(
-                  'Claimable GNS',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                const Expanded(
+                  child: Text(
+                    'Claimable Tokens',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                 ),
-                const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
@@ -489,7 +552,7 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Text(
-                    '${totalClaimable.toStringAsFixed(0)} GNS',
+                    summaryText,
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       color: Colors.black,
@@ -503,13 +566,6 @@ class _GnsTokenScreenState extends State<GnsTokenScreen> {
               '${_claimableBalances.length} pending claim(s)',
               style: TextStyle(color: Colors.grey[600]),
             ),
-            if (!_hasTrustline) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Trustline will be created automatically',
-                style: TextStyle(color: Colors.grey[600], fontSize: 12),
-              ),
-            ],
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,

@@ -24,15 +24,15 @@ import 'email_compose_screen.dart';
 /// Email gateway public key - messages from this key are emails
 const String EMAIL_GATEWAY_PUBLIC_KEY = '007dd9b2c19308dd0e2dfc044da05a522a1d1adbd6f1c84147cc4e0b7a4bd53d';
 
-/// Email thread grouping (by external sender)
+/// Email thread grouping (by subject)
 class EmailThread {
-  final String externalEmail;
+  final String subject;  // ✅ Thread by subject, not sender
   final List<GnsMessage> messages;
   final DateTime lastMessageTime;
   final int unreadCount;
   
   EmailThread({
-    required this.externalEmail,
+    required this.subject,
     required this.messages,
     required this.lastMessageTime,
     this.unreadCount = 0,
@@ -40,25 +40,21 @@ class EmailThread {
   
   GnsMessage get lastMessage => messages.last;
   
-  String get lastSubject {
-    final msg = lastMessage;
+  // For backward compatibility (used as unique key)
+  String get externalEmail => subject;
+  
+  // Extract sender email from the first message
+  String get senderEmail {
+    if (messages.isEmpty) return 'unknown@email.com';
+    final msg = messages.first;
     if (msg.payload is EmailPayload) {
-      return (msg.payload as EmailPayload).subject;
+      final emailPayload = msg.payload as EmailPayload;
+      return emailPayload.from ?? 'unknown@email.com';
     }
-    // Try to extract from metadata
-    final meta = msg.metadata;
-    if (meta.containsKey('subject')) {
-      return meta['subject'] as String;
-    }
-    // Try payload JSON
-    try {
-      final json = msg.payload.toJson();
-      if (json.containsKey('subject')) {
-        return json['subject'] as String? ?? '(No subject)';
-      }
-    } catch (_) {}
-    return '(No subject)';
+    return 'unknown@email.com';
   }
+  
+  String get lastSubject => subject;
   
   String get previewText {
     final msg = lastMessage;
@@ -79,12 +75,12 @@ class EmailThread {
   
   String get senderName {
     // Extract email before @
-    return externalEmail.split('@').first;
+    return senderEmail.split('@').first;
   }
   
   String get senderDomain {
-    if (externalEmail.contains('@')) {
-      return externalEmail.split('@').last;
+    if (senderEmail.contains('@')) {
+      return senderEmail.split('@').last;
     }
     return '';
   }
@@ -129,10 +125,22 @@ class _EmailListScreenState extends State<EmailListScreen> {
     
     // Listen for new messages
     _messageSubscription = widget.commService.incomingMessages.listen((message) {
+      debugPrint('📨 EmailListScreen: New message received');
+      debugPrint('   PayloadType: ${message.payloadType}');
+      debugPrint('   From: ${message.fromPublicKey.substring(0, 16)}...');
+      
       // Check if it's an email
-      if (message.payloadType == PayloadType.email ||
-          message.fromPublicKey.toLowerCase() == EMAIL_GATEWAY_PUBLIC_KEY.toLowerCase()) {
+      final isEmailType = message.payloadType == PayloadType.email;
+      final isFromGateway = message.fromPublicKey.toLowerCase() == EMAIL_GATEWAY_PUBLIC_KEY.toLowerCase();
+      
+      debugPrint('   isEmailType: $isEmailType');
+      debugPrint('   isFromGateway: $isFromGateway');
+      
+      if (isEmailType || isFromGateway) {
+        debugPrint('   ✅ Identified as email, reloading...');
         _loadEmails();
+      } else {
+        debugPrint('   ❌ NOT identified as email');
       }
     });
   }
@@ -154,51 +162,55 @@ class _EmailListScreenState extends State<EmailListScreen> {
     try {
       setState(() => _loading = true);
       
+      debugPrint('📧 _loadEmails: Starting email load...');
+      
       // Get all threads
       final allThreads = await widget.commService.getThreads();
+      debugPrint('   Found ${allThreads.length} total threads');
       
-      // Filter for email threads (from email gateway)
+      // ✅ Filter for email messages in ANY thread (not just gateway threads)
       final emailMessages = <GnsMessage>[];
       
       for (final threadPreview in allThreads) {
         final thread = threadPreview.thread;
         
-        // Check if this thread involves the email gateway
-        if (thread.participantKeys.any((k) => 
-            k.toLowerCase() == EMAIL_GATEWAY_PUBLIC_KEY.toLowerCase())) {
-          // Load messages for this thread
-          final messages = await widget.commService.getMessages(thread.id);
-          emailMessages.addAll(messages.where((m) => 
-            m.payloadType == PayloadType.email ||
-            m.fromPublicKey.toLowerCase() == EMAIL_GATEWAY_PUBLIC_KEY.toLowerCase()
-          ).where((m) => !m.isDeleted));
+        // Load messages for this thread
+        final messages = await widget.commService.getMessages(thread.id);
+        
+        // ✅ Filter for email payloadType (includes both incoming AND outgoing)
+        final emailsInThread = messages.where((m) => 
+          m.payloadType == PayloadType.email
+        ).where((m) => !m.isDeleted).toList();
+        
+        if (emailsInThread.isNotEmpty) {
+          debugPrint('   Thread ${thread.id.substring(0, 8)}: Found ${emailsInThread.length} emails');
+          for (final email in emailsInThread) {
+            debugPrint('      - ${email.id.substring(0, 8)}: from=${email.fromPublicKey.substring(0, 8)}, direction=${email.fromPublicKey == widget.wallet.publicKey ? "SENT" : "RECEIVED"}');
+          }
+          emailMessages.addAll(emailsInThread);
         }
       }
       
-      // Group by external sender email
+      // ✅ Group by subject (email threading based on subject line)
       final threadMap = <String, List<GnsMessage>>{};
       
       for (final msg in emailMessages) {
-        String externalEmail = 'unknown@email.com';
+        String subject = '(No Subject)';
         
-        // Extract external email from payload
+        // Extract subject from payload
         if (msg.payload is EmailPayload) {
-          final meta = msg.metadata;
-          if (meta.containsKey('from')) {
-            externalEmail = meta['from'] as String;
-          }
+          final emailPayload = msg.payload as EmailPayload;
+          subject = emailPayload.subject;
         }
         
-        // Also try to get from the raw payload JSON
-        try {
-          final payloadJson = msg.payload.toJson();
-          if (payloadJson.containsKey('from')) {
-            externalEmail = payloadJson['from'] as String;
-          }
-        } catch (_) {}
+        // ✅ Normalize subject: strip Re:, Fwd:, etc. for proper threading
+        final normalizedSubject = subject
+          .replaceAll(RegExp(r'^(re|fw|fwd):\s*', caseSensitive: false), '')
+          .trim()
+          .toLowerCase();
         
-        threadMap.putIfAbsent(externalEmail, () => []);
-        threadMap[externalEmail]!.add(msg);
+        threadMap.putIfAbsent(normalizedSubject, () => []);
+        threadMap[normalizedSubject]!.add(msg);
       }
       
       // Create EmailThread objects
@@ -206,7 +218,7 @@ class _EmailListScreenState extends State<EmailListScreen> {
         final messages = entry.value..sort((a, b) => a.timestamp.compareTo(b.timestamp));
         final unreadCount = messages.where((m) => m.status != MessageStatus.read).length;
         return EmailThread(
-          externalEmail: entry.key,
+          subject: entry.key,  // ✅ Now using subject as identifier
           messages: messages,
           lastMessageTime: messages.last.timestamp,
           unreadCount: unreadCount,

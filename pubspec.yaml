@@ -1,10 +1,10 @@
 name: gns_browser
 description: GNS - Identity through Presence. Replace DNS with cryptographic proof-of-trajectory.
-publish_to: 'none'
-version: 0.1.0+22
+publish_to: "none"
+version: 0.1.0+46
 
 environment:
-  sdk: '>=3.2.0 <4.0.0'
+  sdk: ">=3.2.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -34,11 +34,18 @@ dependencies:
   flutter_chat_types: ^3.6.2
   stellar_flutter_sdk: ^2.1.8
   supabase_flutter: ^2.3.0
-  
+  flutter_webrtc: ^0.12.3
+  flutter_ringtone_player: ^4.0.0+3
+
   # Phase 4b - Map Visualization
   flutter_map: ^8.2.2
   latlong2: ^0.9.1
   crypto: ^3.0.7
+  nfc_manager: ^3.3.0
+  audio_session: ^0.1.25
+  flutter_callkit_incoming: ^3.0.0
+  device_info_plus: ^12.3.0
+  package_info_plus: ^9.0.0
 
 dev_dependencies:
   flutter_test:
@@ -54,3 +61,6 @@ flutter_launcher_icons:
   ios: true
   image_path: "assets/icons/gpinner_icon.png"
   remove_alpha_ios: true
+
+  assets:
+    - assets/audio/

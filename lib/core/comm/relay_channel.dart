@@ -8,9 +8,11 @@
 /// - HTTP: /messages (not /api/v1/messages)
 /// - WebSocket: /ws (not /api/v1/ws)
 
+library relay_channel;
+
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -141,6 +143,7 @@ class RelayChannel implements CommunicationChannel {
   
   final _stateController = StreamController<ChannelState>.broadcast();
   final _envelopeController = StreamController<GnsEnvelope>.broadcast();
+  final _callSignalController = StreamController<Map<String, dynamic>>.broadcast();
 
   RelayChannel({
     required this.config,
@@ -178,6 +181,18 @@ class RelayChannel implements CommunicationChannel {
   
   @override
   Stream<GnsEnvelope> get incomingEnvelopes => _envelopeController.stream;
+  
+  /// Stream of incoming call signals (call_offer, call_answer, etc.)
+  Stream<Map<String, dynamic>> get callSignalStream => _callSignalController.stream;
+  
+  /// Send a raw JSON string over WebSocket (used by CallService for signaling)
+  void sendRaw(String jsonMessage) {
+    if (_state == ChannelState.connected && _wsChannel != null) {
+      _wsChannel!.sink.add(jsonMessage);
+    } else {
+      debugPrint('⚠️ Cannot sendRaw: WebSocket not connected');
+    }
+  }
 
   void _setState(ChannelState newState) {
     if (_state != newState) {
@@ -536,6 +551,17 @@ class RelayChannel implements CommunicationChannel {
         case 'error':
           debugPrint('Relay error: ${json['message']}');
           break;
+          
+        // ✅ Call signaling — forward to CallService via stream
+        case 'call_offer':
+        case 'call_answer':
+        case 'call_ice':
+        case 'call_hangup':
+        case 'call_busy':
+        case 'call_reject':
+        case 'call_ringing':
+          _callSignalController.add(json);
+          break;
       }
     } catch (e) {
       debugPrint('Error handling WebSocket message: $e');
@@ -586,6 +612,7 @@ class RelayChannel implements CommunicationChannel {
     await disconnect();
     await _stateController.close();
     await _envelopeController.close();
+    await _callSignalController.close();
   }
 }
 

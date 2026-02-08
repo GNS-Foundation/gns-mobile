@@ -1,14 +1,14 @@
-/// Organization Namespace Registration Screen - Phase 5 (v2)
+/// Organization Namespace Registration Screen - Updated v3
 /// 
-/// Register a new organization namespace on GNS with DNS verification.
-/// Organizations must prove domain ownership via DNS TXT record.
+/// Now uses OrgService to persist registrations locally.
+/// Users can leave and return to continue verification.
 /// 
 /// Flow:
-/// 1. User submits registration form
+/// 1. User submits registration form → Saved to local storage
 /// 2. Server generates verification code
 /// 3. User adds TXT record to their domain
 /// 4. User clicks "Verify" → Server checks DNS
-/// 5. On success → Namespace granted!
+/// 5. On success → Namespace verified!
 /// 
 /// Location: lib/ui/screens/org_registration_screen.dart
 
@@ -16,10 +16,15 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import '../../core/org/org_storage.dart';
+import '../../core/org/org_service.dart';
 
 /// Organization namespace registration with DNS verification
 class OrgRegistrationScreen extends StatefulWidget {
-  const OrgRegistrationScreen({super.key});
+  /// Optional: Pre-fill with existing pending registration
+  final OrgRegistration? existingRegistration;
+  
+  const OrgRegistrationScreen({super.key, this.existingRegistration});
 
   @override
   State<OrgRegistrationScreen> createState() => _OrgRegistrationScreenState();
@@ -33,6 +38,8 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
   final _websiteController = TextEditingController();
   final _descriptionController = TextEditingController();
   
+  final _orgService = OrgService.instance;
+  
   // Registration state
   _RegistrationState _state = _RegistrationState.form;
   String _selectedTier = 'starter';
@@ -40,10 +47,8 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
   bool _checkingAvailability = false;
   bool? _isAvailable;
   
-  // Verification state
-  String? _verificationCode;
-  String? _verificationDomain;
-  String? _registrationId;
+  // Verification state - now from OrgRegistration
+  OrgRegistration? _registration;
   bool _verifying = false;
   String? _verificationError;
   
@@ -81,6 +86,27 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _initService();
+    
+    // If existing registration passed, show verify state
+    if (widget.existingRegistration != null) {
+      _registration = widget.existingRegistration;
+      _namespaceController.text = _registration!.namespace;
+      _orgNameController.text = _registration!.organizationName;
+      _emailController.text = _registration!.email;
+      _websiteController.text = _registration!.domain;
+      _selectedTier = _registration!.tier;
+      _state = _RegistrationState.verify;
+    }
+  }
+
+  Future<void> _initService() async {
+    await _orgService.initialize();
+  }
+
+  @override
   void dispose() {
     _namespaceController.dispose();
     _orgNameController.dispose();
@@ -111,22 +137,24 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
     
     try {
       final response = await http.get(
-        Uri.parse('$_apiBase/gsite/$clean@'),
+        Uri.parse('$_apiBase/org/check/$clean'),  // ← Use correct endpoint
       ).timeout(const Duration(seconds: 10));
       
+      final data = jsonDecode(response.body);
+      
       setState(() {
-        _isAvailable = response.statusCode == 404;
+        _isAvailable = data['success'] == true && data['data']?['available'] == true;
         _checkingAvailability = false;
       });
     } catch (e) {
       setState(() {
-        _isAvailable = true; // Assume available if check fails
+        _isAvailable = null;
         _checkingAvailability = false;
       });
     }
   }
 
-  /// Submit registration and get verification code
+  /// Submit registration using OrgService
   Future<void> _submitRegistration() async {
     if (!_formKey.currentState!.validate()) return;
     if (_isAvailable != true) {
@@ -140,88 +168,49 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
     
     setState(() => _loading = true);
     
-    try {
-      final namespace = _namespaceController.text.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-      final domain = _extractDomain(_websiteController.text);
-      
-      // Request verification code from server
-      final response = await http.post(
-        Uri.parse('$_apiBase/org/register'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'namespace': namespace,
-          'organization_name': _orgNameController.text,
-          'email': _emailController.text,
-          'website': _websiteController.text,
-          'domain': domain,
-          'description': _descriptionController.text,
-          'tier': _selectedTier,
-        }),
-      ).timeout(const Duration(seconds: 15));
-      
-      final data = jsonDecode(response.body);
-      
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        setState(() {
-          _verificationCode = data['verification_code'] ?? 'gns-verify-${namespace.hashCode.abs().toString().substring(0, 8)}';
-          _verificationDomain = domain;
-          _registrationId = data['registration_id'];
-          _state = _RegistrationState.verify;
-          _loading = false;
-        });
-      } else {
-        _showError(data['error'] ?? 'Registration failed');
-        setState(() => _loading = false);
-      }
-    } catch (e) {
-      // For demo: generate local verification code
-      final namespace = _namespaceController.text.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-      final domain = _extractDomain(_websiteController.text);
-      
+    final result = await _orgService.register(
+      namespace: _namespaceController.text,
+      organizationName: _orgNameController.text,
+      email: _emailController.text,
+      website: _websiteController.text,
+      description: _descriptionController.text.isNotEmpty 
+          ? _descriptionController.text 
+          : null,
+      tier: _selectedTier,
+    );
+    
+    if (result.success && result.data != null) {
       setState(() {
-        _verificationCode = 'gns-verify-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
-        _verificationDomain = domain;
-        _registrationId = 'pending-$namespace';
+        _registration = result.data;
         _state = _RegistrationState.verify;
         _loading = false;
       });
+    } else {
+      _showError(result.error ?? 'Registration failed');
+      setState(() => _loading = false);
     }
   }
 
-  /// Verify DNS TXT record
+  /// Verify DNS using OrgService
   Future<void> _verifyDns() async {
+    if (_registration == null) return;
+    
     setState(() {
       _verifying = true;
       _verificationError = null;
     });
     
-    try {
-      final response = await http.post(
-        Uri.parse('$_apiBase/org/verify'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'registration_id': _registrationId,
-          'domain': _verificationDomain,
-          'verification_code': _verificationCode,
-        }),
-      ).timeout(const Duration(seconds: 30));
-      
-      final data = jsonDecode(response.body);
-      
-      if (response.statusCode == 200 && data['verified'] == true) {
-        setState(() {
-          _state = _RegistrationState.success;
-          _verifying = false;
-        });
-      } else {
-        setState(() {
-          _verificationError = data['error'] ?? 'DNS record not found. Please wait a few minutes for DNS propagation.';
-          _verifying = false;
-        });
-      }
-    } catch (e) {
+    final result = await _orgService.verifyDns(_registration!.namespace);
+    
+    if (result.success && result.data != null) {
       setState(() {
-        _verificationError = 'Verification failed. DNS records can take up to 24 hours to propagate. Please try again later.';
+        _registration = result.data;
+        _state = _RegistrationState.success;
+        _verifying = false;
+      });
+    } else {
+      setState(() {
+        _verificationError = result.error ?? 'DNS record not found. Please wait a few minutes for DNS propagation.';
         _verifying = false;
       });
     }
@@ -239,7 +228,6 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
       const SnackBar(
         content: Text('Copied to clipboard!'),
         backgroundColor: Colors.green,
-        duration: Duration(seconds: 1),
       ),
     );
   }
@@ -248,14 +236,30 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Register Organization'),
-        centerTitle: true,
+        title: Text(_state == _RegistrationState.success 
+            ? 'Success!' 
+            : _state == _RegistrationState.verify 
+                ? 'Verify Domain' 
+                : 'Register Organization'),
+        leading: _state != _RegistrationState.form
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () {
+                  if (_state == _RegistrationState.verify) {
+                    // Return to My Organizations to see pending registration
+                    Navigator.pop(context);
+                  } else {
+                    Navigator.pop(context);
+                  }
+                },
+              )
+            : null,
       ),
-      body: switch (_state) {
-        _RegistrationState.form => _buildFormView(),
-        _RegistrationState.verify => _buildVerifyView(),
-        _RegistrationState.success => _buildSuccessView(),
-      },
+      body: _state == _RegistrationState.form
+          ? _buildFormView()
+          : _state == _RegistrationState.verify
+              ? _buildVerifyView()
+              : _buildSuccessView(),
     );
   }
 
@@ -269,70 +273,30 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
         children: [
           // Header
           Container(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF8B5CF6), Color(0xFF7C3AED)],
+              gradient: LinearGradient(
+                colors: [Colors.purple[700]!, Colors.purple[500]!],
               ),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: const Column(
+            child: Column(
               children: [
-                Text('🏢', style: TextStyle(fontSize: 48)),
-                SizedBox(height: 8),
-                Text(
-                  'Organization Namespace',
+                const Text('🏢', style: TextStyle(fontSize: 48)),
+                const SizedBox(height: 12),
+                const Text(
+                  'Claim Your Namespace',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                SizedBox(height: 4),
+                const SizedBox(height: 8),
                 Text(
-                  'Claim your organization\'s identity on GNS',
-                  style: TextStyle(color: Colors.white70),
+                  'Register company@ and give your team verified identities',
+                  style: TextStyle(color: Colors.white.withOpacity(0.9)),
                   textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-          
-          const SizedBox(height: 16),
-          
-          // DNS Verification Notice
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.blue[50],
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.blue[200]!),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.verified_user, color: Colors.blue[700]),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'DNS Verification Required',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue[800],
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'You\'ll need to add a TXT record to your domain to prove ownership.',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.blue[700],
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ],
             ),
@@ -340,105 +304,102 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
           
           const SizedBox(height: 24),
           
-          // Namespace Input
+          // Namespace field
           _buildLabel('NAMESPACE'),
           TextFormField(
             controller: _namespaceController,
             decoration: InputDecoration(
-              hintText: 'yourcompany',
+              hintText: 'company',
               suffixText: '@',
-              suffixStyle: const TextStyle(
-                fontSize: 18,
+              suffixStyle: TextStyle(
+                color: Colors.purple[700],
                 fontWeight: FontWeight.bold,
-                color: Colors.purple,
+                fontSize: 18,
               ),
-              prefixIcon: _checkingAvailability
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : _isAvailable == true
-                      ? const Icon(Icons.check_circle, color: Colors.green)
-                      : _isAvailable == false
-                          ? const Icon(Icons.cancel, color: Colors.red)
-                          : const Icon(Icons.business),
+              prefixIcon: const Icon(Icons.alternate_email),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey[50],
             ),
+            onChanged: _checkAvailability,
             validator: (v) {
               if (v == null || v.isEmpty) return 'Required';
-              if (v.length < 3) return 'At least 3 characters';
-              if (v.length > 20) return 'Maximum 20 characters';
-              if (!RegExp(r'^[a-zA-Z0-9]+$').hasMatch(v)) {
-                return 'Letters and numbers only';
-              }
+              if (v.length < 3) return 'Min 3 characters';
+              if (!RegExp(r'^[a-zA-Z0-9]+$').hasMatch(v)) return 'Letters and numbers only';
               return null;
-            },
-            onChanged: (value) {
-              Future.delayed(const Duration(milliseconds: 500), () {
-                if (_namespaceController.text == value) {
-                  _checkAvailability(value);
-                }
-              });
             },
           ),
           
-          if (_isAvailable == true) ...[
-            const SizedBox(height: 8),
-            _buildStatusBox(
-              icon: Icons.check,
-              color: Colors.green,
-              text: '${_namespaceController.text.toLowerCase()}@ is available!',
+          // Availability indicator
+          if (_checkingAvailability)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                  SizedBox(width: 8),
+                  Text('Checking availability...'),
+                ],
+              ),
+            )
+          else if (_isAvailable == true)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.check_circle, color: Colors.green, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_namespaceController.text.toLowerCase()}@ is available!',
+                    style: const TextStyle(color: Colors.green),
+                  ),
+                ],
+              ),
+            )
+          else if (_isAvailable == false)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.cancel, color: Colors.red, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_namespaceController.text.toLowerCase()}@ is not available',
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                ],
+              ),
             ),
-          ],
-          
-          if (_isAvailable == false) ...[
-            const SizedBox(height: 8),
-            _buildStatusBox(
-              icon: Icons.close,
-              color: Colors.red,
-              text: 'This namespace is already taken',
-            ),
-          ],
           
           const SizedBox(height: 20),
           
-          // Organization Name
+          // Organization name
           _buildLabel('ORGANIZATION NAME'),
           TextFormField(
             controller: _orgNameController,
-            decoration: _inputDecoration('Your Company Inc.', Icons.badge),
+            decoration: _inputDecoration('Acme Corp', Icons.business),
             validator: (v) => v?.isEmpty == true ? 'Required' : null,
           ),
           
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           
-          // Website (Required for DNS verification)
-          _buildLabel('WEBSITE (REQUIRED FOR VERIFICATION)'),
+          // Website
+          _buildLabel('WEBSITE (for DNS verification)'),
           TextFormField(
             controller: _websiteController,
+            decoration: _inputDecoration('https://acme.com', Icons.language),
             keyboardType: TextInputType.url,
-            decoration: _inputDecoration('https://yourcompany.com', Icons.language),
-            validator: (v) {
-              if (v?.isEmpty == true) return 'Required for DNS verification';
-              if (!v!.contains('.')) return 'Enter a valid domain';
-              return null;
-            },
+            validator: (v) => v?.isEmpty == true ? 'Required for DNS verification' : null,
           ),
           
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           
           // Email
-          _buildLabel('BUSINESS EMAIL'),
+          _buildLabel('ADMIN EMAIL'),
           TextFormField(
             controller: _emailController,
+            decoration: _inputDecoration('admin@acme.com', Icons.email),
             keyboardType: TextInputType.emailAddress,
-            decoration: _inputDecoration('contact@yourcompany.com', Icons.email),
             validator: (v) {
               if (v?.isEmpty == true) return 'Required';
               if (!v!.contains('@')) return 'Invalid email';
@@ -446,55 +407,69 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
             },
           ),
           
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           
-          // Description
-          _buildLabel('DESCRIPTION'),
+          // Description (optional)
+          _buildLabel('DESCRIPTION (optional)'),
           TextFormField(
             controller: _descriptionController,
-            maxLines: 3,
-            maxLength: 200,
-            decoration: InputDecoration(
-              hintText: 'Tell us about your organization...',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              filled: true,
-              fillColor: Colors.grey[50],
-            ),
+            decoration: _inputDecoration('Brief description of your organization', Icons.description),
+            maxLines: 2,
           ),
           
           const SizedBox(height: 24),
           
-          // Pricing Tiers
+          // Tier selection
           _buildLabel('SELECT PLAN'),
-          const SizedBox(height: 8),
+          ..._tiers.map((tier) => _buildTierCard(tier)),
           
-          ...(_tiers.map((tier) => _buildTierCard(tier))),
+          const SizedBox(height: 32),
           
-          const SizedBox(height: 24),
-          
-          // Submit Button
-          ElevatedButton(
-            onPressed: _loading ? null : _submitRegistration,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF8B5CF6),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          // Submit button
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton(
+              onPressed: _loading ? null : _submitRegistration,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.purple,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: _loading
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                    )
+                  : const Text(
+                      'CONTINUE TO VERIFICATION',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
             ),
-            child: _loading
-                ? const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                  )
-                : const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.arrow_forward),
-                      SizedBox(width: 8),
-                      Text('CONTINUE TO VERIFICATION', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    ],
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Info text
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info, color: Colors.blue[700]),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'You\'ll need to add a DNS TXT record to verify domain ownership.',
+                    style: TextStyle(color: Colors.blue[800]),
                   ),
+                ),
+              ],
+            ),
           ),
           
           const SizedBox(height: 32),
@@ -506,65 +481,36 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
   // ==================== VERIFY VIEW ====================
   
   Widget _buildVerifyView() {
-    final txtRecord = 'gns-verify=$_verificationCode';
+    if (_registration == null) {
+      return const Center(child: Text('No registration data'));
+    }
     
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        // Header
+        // Status header
         Container(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
-            ),
+            color: Colors.orange[50],
             borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.orange[200]!),
           ),
-          child: const Column(
+          child: Column(
             children: [
-              Text('🔐', style: TextStyle(fontSize: 48)),
-              SizedBox(height: 8),
+              const Text('⏳', style: TextStyle(fontSize: 48)),
+              const SizedBox(height: 12),
+              const Text(
+                'DNS Verification Required',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
               Text(
-                'Verify Domain Ownership',
+                '${_registration!.namespace}@',
                 style: TextStyle(
-                  color: Colors.white,
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
-                ),
-              ),
-              SizedBox(height: 4),
-              Text(
-                'Add a DNS TXT record to prove you own this domain',
-                style: TextStyle(color: Colors.white70),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 24),
-        
-        // Domain Info
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.grey[100],
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.language, color: Colors.purple),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Domain to verify:', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    Text(
-                      _verificationDomain ?? '',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-                    ),
-                  ],
+                  color: Colors.purple[700],
                 ),
               ),
             ],
@@ -574,45 +520,32 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
         const SizedBox(height: 24),
         
         // Instructions
-        _buildLabel('STEP 1: ADD DNS TXT RECORD'),
-        const SizedBox(height: 8),
-        
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey[300]!),
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Add this TXT record to your domain\'s DNS settings:',
-                style: TextStyle(fontSize: 14),
+                'Add this TXT record to your DNS:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
               ),
               const SizedBox(height: 16),
-              
-              // Record Type
               _buildDnsField('Type', 'TXT'),
               const SizedBox(height: 12),
-              
-              // Host/Name
-              _buildDnsField('Host / Name', '@  or  $_verificationDomain'),
+              _buildDnsFieldWithCopy('Host', _registration!.txtRecordHost),
               const SizedBox(height: 12),
-              
-              // Value
-              _buildDnsFieldWithCopy('Value', txtRecord),
+              _buildDnsFieldWithCopy('Value', _registration!.txtRecordValue),
             ],
           ),
         ),
         
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
         
-        // Common DNS Providers
-        _buildLabel('STEP 2: WHERE TO ADD IT'),
-        const SizedBox(height: 8),
-        
+        // Provider help
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -622,11 +555,17 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Log in to your domain registrar or DNS provider:',
-                style: TextStyle(color: Colors.blue[800]),
+              Row(
+                children: [
+                  Icon(Icons.help_outline, color: Colors.blue[700], size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Common DNS Providers',
+                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue[800]),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -634,9 +573,8 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
                   _buildProviderChip('Cloudflare'),
                   _buildProviderChip('GoDaddy'),
                   _buildProviderChip('Namecheap'),
-                  _buildProviderChip('Google Domains'),
-                  _buildProviderChip('Route 53'),
-                  _buildProviderChip('Squarespace'),
+                  _buildProviderChip('Route53'),
+                  _buildProviderChip('Google DNS'),
                 ],
               ),
             ],
@@ -645,44 +583,11 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
         
         const SizedBox(height: 24),
         
-        // Propagation Notice
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.amber[50],
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.amber[200]!),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.schedule, color: Colors.amber[800]),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'DNS Propagation',
-                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber[900]),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'DNS changes can take 5 minutes to 24 hours to propagate. If verification fails, please wait and try again.',
-                      style: TextStyle(fontSize: 13, color: Colors.amber[800]),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 24),
-        
-        // Verification Error
-        if (_verificationError != null) ...[
+        // Error message
+        if (_verificationError != null)
           Container(
             padding: const EdgeInsets.all(16),
+            margin: const EdgeInsets.only(bottom: 16),
             decoration: BoxDecoration(
               color: Colors.red[50],
               borderRadius: BorderRadius.circular(12),
@@ -690,61 +595,66 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
             ),
             child: Row(
               children: [
-                Icon(Icons.error_outline, color: Colors.red[700]),
+                Icon(Icons.warning, color: Colors.red[700]),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     _verificationError!,
-                    style: TextStyle(color: Colors.red[700]),
+                    style: TextStyle(color: Colors.red[800]),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
-        ],
         
-        // Verify Button
-        _buildLabel('STEP 3: VERIFY'),
-        const SizedBox(height: 8),
-        
-        ElevatedButton(
-          onPressed: _verifying ? null : _verifyDns,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF10B981),
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        // Verify button
+        SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: ElevatedButton(
+            onPressed: _verifying ? null : _verifyDns,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: _verifying
+                ? const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                      SizedBox(width: 12),
+                      Text('Checking DNS...'),
+                    ],
+                  )
+                : const Text(
+                    'VERIFY DNS RECORD',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
           ),
-          child: _verifying
-              ? const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    ),
-                    SizedBox(width: 12),
-                    Text('CHECKING DNS...'),
-                  ],
-                )
-              : const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.verified),
-                    SizedBox(width: 8),
-                    Text('VERIFY DNS RECORD', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  ],
-                ),
         ),
         
         const SizedBox(height: 16),
         
-        // Back button
-        TextButton(
-          onPressed: () => setState(() => _state = _RegistrationState.form),
-          child: const Text('← Back to form'),
+        // Info about propagation
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.amber[50],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.schedule, color: Colors.amber[800]),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'DNS changes can take 5 minutes to 48 hours to propagate. You can close this screen and check back later from My Organizations.',
+                  style: TextStyle(color: Colors.amber[900], fontSize: 13),
+                ),
+              ),
+            ],
+          ),
         ),
         
         const SizedBox(height: 32),
@@ -755,8 +665,6 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
   // ==================== SUCCESS VIEW ====================
   
   Widget _buildSuccessView() {
-    final namespace = _namespaceController.text.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-    
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -766,12 +674,12 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
             const Text('🎉', style: TextStyle(fontSize: 80)),
             const SizedBox(height: 24),
             const Text(
-              'Namespace Registered!',
+              'Namespace Verified!',
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
-              '$namespace@',
+              '${_registration?.namespace ?? ''}@',
               style: const TextStyle(
                 fontSize: 32,
                 fontWeight: FontWeight.bold,
@@ -791,13 +699,13 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
                   Icon(Icons.check_circle, color: Colors.green[600], size: 48),
                   const SizedBox(height: 12),
                   Text(
-                    'Your organization namespace is now active!',
+                    'Your organization namespace is now verified!',
                     style: TextStyle(color: Colors.green[800], fontWeight: FontWeight.w500),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'You can now add team members and create your organization\'s gSite.',
+                    'Go to My Organizations to activate and add team members.',
                     style: TextStyle(color: Colors.green[700], fontSize: 14),
                     textAlign: TextAlign.center,
                   ),
@@ -840,23 +748,6 @@ class _OrgRegistrationScreenState extends State<OrgRegistrationScreen> {
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       filled: true,
       fillColor: Colors.grey[50],
-    );
-  }
-
-  Widget _buildStatusBox({required IconData icon, required Color color, required String text}) {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 16),
-          const SizedBox(width: 8),
-          Text(text, style: TextStyle(color: color, fontWeight: FontWeight.w500)),
-        ],
-      ),
     );
   }
 

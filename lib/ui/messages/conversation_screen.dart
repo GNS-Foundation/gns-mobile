@@ -1,15 +1,3 @@
-/// Conversation Screen - FULLY CUSTOM Chat View with Hashtag Support
-/// 
-/// Features:
-/// - ✅ Custom long-press menu
-/// - ✅ WhatsApp-style reactions (persistent)
-/// - ✅ Reply to messages
-/// - ✅ Star messages
-/// - ✅ Better message bubbles
-/// - ✅ Multi-select mode (like WhatsApp)
-/// - ✅ NEW: Hashtag detection → Post to facets
-/// - ✅ NEW: Create facets on-the-fly
-/// 
 /// Location: lib/ui/messages/conversation_screen.dart
 
 import 'dart:async';
@@ -17,12 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/comm/communication_service.dart';
 import '../../core/comm/message_storage.dart';
-import '../../core/comm/gns_envelope.dart';  // ✅ For GnsThread
+import '../../core/comm/gns_envelope.dart'; 
 import '../../core/contacts/contact_storage.dart';
 import '../../core/profile/profile_facet.dart';
 import '../../core/profile/facet_storage.dart';
 import '../../core/theme/theme_service.dart';
-import 'compose_area.dart';  // ✅ NEW: Import ComposeArea
+import '../../core/calls/call_service.dart';  
+import '../../core/calls/call_screen.dart';          
+import 'compose_area.dart';  
 
 class ConversationScreen extends StatefulWidget {
   final GnsThread thread;
@@ -135,15 +125,17 @@ class _ConversationScreenState extends State<ConversationScreen> {
       );
     }
     
-    _autoRefreshTimer = Timer.periodic(
-      const Duration(seconds: 3),
-      (_) async {
-        if (mounted) {
-          await widget.commService.syncMessages();
-          await _loadMessages();
-        }
-      },
-    );
+    // ❌ DISABLED: 3-second polling causes infinite sync loop!
+    // WebSocket notifications handle real-time updates.
+    // _autoRefreshTimer = Timer.periodic(
+    //   const Duration(seconds: 3),
+    //   (_) async {
+    //     if (mounted) {
+    //       await widget.commService.syncMessages();
+    //       await _loadMessages();
+    //     }
+    //   },
+    // );
   }
 
   Future<void> _loadMessages() async {
@@ -724,6 +716,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
         ],
       ),
       actions: [
+        // 📞 Voice call
+        IconButton(
+          icon: const Icon(Icons.call, size: 22),
+          tooltip: 'Voice call',
+          onPressed: () => _startCall('voice'),
+        ),
+        // 📹 Video call
+        IconButton(
+          icon: const Icon(Icons.videocam, size: 22),
+          tooltip: 'Video call',
+          onPressed: () => _startCall('video'),
+        ),
         IconButton(
           icon: const Icon(Icons.star_outline),
           onPressed: _showStarredMessages,
@@ -1701,6 +1705,22 @@ class _ConversationScreenState extends State<ConversationScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  // ==================== CALL ====================
+
+  void _startCall(String callType) {
+    if (_otherPublicKey == null) return;
+
+    final type = callType == 'video' ? CallType.video : CallType.voice;
+
+    // Open the CallScreen — it triggers CallService.startCall() internally
+    CallScreen.show(
+      context,
+      remotePublicKey: _otherPublicKey!,
+      remoteHandle: _otherHandle,
+      callType: type,
     );
   }
 

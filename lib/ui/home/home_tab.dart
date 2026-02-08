@@ -30,6 +30,7 @@ import '../screens/browser_pairing_screen.dart';
 import '../financial/send_money_screen.dart';
 import '../financial/transactions_screen.dart';
 import '../financial/financial_hub_screen.dart';
+import '../widgets/floating_nfc_button.dart';
 
 // ==================== HOME TAB ====================
 
@@ -176,46 +177,57 @@ class _HomeTabState extends State<HomeTab> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _loadData,
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  // 1. Identity Card
-                  if (_myIdentity != null) 
-                    IdentityCard(
-                      identity: _myIdentity!,
-                      onEdit: _editProfile,
-                    ),
-                  const SizedBox(height: 16),
-                  
-                  // 2. Breadcrumb Collection (core GNS action - moved up)
-                  _buildQuickActions(),
-                  const SizedBox(height: 16),
-                  
-                  // 3. Search Bar
-                  GnsSearchBar(
-                    controller: _searchController,
-                    onSearch: _search,
+      body: Stack(
+        children: [
+          // Main content
+          RefreshIndicator(
+            onRefresh: _loadData,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      // 1. Identity Card
+                      if (_myIdentity != null) 
+                        IdentityCard(
+                          identity: _myIdentity!,
+                          onEdit: _editProfile,
+                        ),
+                      const SizedBox(height: 16),
+                      
+                      // 2. Breadcrumb Collection (core GNS action - moved up)
+                      _buildQuickActions(),
+                      const SizedBox(height: 16),
+                      
+                      // 3. Search Bar
+                      GnsSearchBar(
+                        controller: _searchController,
+                        onSearch: _search,
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // 4. Handle Card (progress/claimed)
+                      _buildHandleCard(),
+                      const SizedBox(height: 16),
+                      
+                      // 5. GNS Token Card (NEW!)
+                      _buildGnsTokenCard(),
+                      const SizedBox(height: 16),
+                      
+                      // 6. Payments Card (secondary feature - at bottom)
+                      _buildPaymentsCard(),
+                      
+                      const SizedBox(height: 24),
+                    ],
                   ),
-                  const SizedBox(height: 16),
-                  
-                  // 4. Handle Card (progress/claimed)
-                  _buildHandleCard(),
-                  const SizedBox(height: 16),
-                  
-                  // 5. GNS Token Card (NEW!)
-                  _buildGnsTokenCard(),
-                  const SizedBox(height: 16),
-                  
-                  // 6. Payments Card (secondary feature - at bottom)
-                  _buildPaymentsCard(),
-                  
-                  const SizedBox(height: 24),
-                ],
-              ),
+          ),
+          
+          // 🆕 NFC Tap-to-Pay Button
+          const FloatingNfcButton(
+            bottom: 24,
+            right: 16,
+          ),
+        ],
       ),
     );
   }

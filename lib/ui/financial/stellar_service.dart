@@ -1,14 +1,24 @@
 // ===========================================
-// GNS Token Layer - Stellar Service (v4 - FIXED)
+// GNS Token Layer - Stellar Service (v5 - STABLECOINS)
 // ===========================================
 // Full Stellar integration with transaction signing
-// Uses stellar_flutter_sdk for client-side signing
-// v4: REMOVED client-side mainnet funding (security fix)
-//     Funding now happens via backend airdrop only
+// v5: Added USDC/EURC stablecoin support for payments
+//
+// Supported Assets:
+// - XLM (native)
+// - GNS (GNS Protocol token)
+// - USDC (Circle USD stablecoin)
+// - EURC (Circle EUR stablecoin)
 
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:stellar_flutter_sdk/stellar_flutter_sdk.dart';
+
+/// Supported stablecoin types
+enum Stablecoin {
+  usdc,
+  eurc,
+}
 
 /// Stellar network configuration
 class StellarConfig {
@@ -24,7 +34,22 @@ class StellarConfig {
   static const String gnsTokenCode = 'GNS';
   static const String gnsIssuerPublic = 'GBVZTFST4PIPV5C3APDIVULNZYZENQSLGDSOKOVQI77GSMT6WVYGF5GL';
   
-  // Starting balance for new accounts (minimum ~1 XLM for account + 0.5 for trustline reserve)
+  // ===========================================
+  // STABLECOIN CONFIGURATION (Circle on Stellar)
+  // ===========================================
+  
+  // USDC - Circle USD Coin on Stellar (MAINNET)
+  static const String usdcCode = 'USDC';
+  static const String usdcIssuer = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+  
+  // EURC - Circle Euro Coin on Stellar (MAINNET)
+  static const String eurcCode = 'EURC';
+  static const String eurcIssuer = 'GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2';
+  
+  // USDC on Testnet (different issuer)
+  static const String usdcIssuerTestnet = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+  
+  // Starting balance for new accounts
   static const String startingBalanceXlm = '1.5';
   
   // Network selection - FALSE = MAINNET
@@ -32,6 +57,31 @@ class StellarConfig {
   
   static String get horizonUrl => useTestnet ? horizonTestnet : horizonMainnet;
   static Network get network => useTestnet ? Network.TESTNET : Network.PUBLIC;
+  
+  /// Get USDC issuer based on network
+  static String get usdcIssuerAddress => useTestnet ? usdcIssuerTestnet : usdcIssuer;
+  
+  /// Get asset code and issuer for a stablecoin
+  static (String code, String issuer) getStablecoinConfig(Stablecoin coin) {
+    switch (coin) {
+      case Stablecoin.usdc:
+        return (usdcCode, usdcIssuerAddress);
+      case Stablecoin.eurc:
+        return (eurcCode, eurcIssuer);
+    }
+  }
+  
+  /// Get stablecoin from string code
+  static Stablecoin? stablecoinFromCode(String code) {
+    switch (code.toUpperCase()) {
+      case 'USDC':
+        return Stablecoin.usdc;
+      case 'EURC':
+        return Stablecoin.eurc;
+      default:
+        return null;
+    }
+  }
 }
 
 /// Result classes
@@ -49,6 +99,33 @@ class StellarBalance {
   });
   
   double get amount => double.tryParse(balance) ?? 0.0;
+  
+  /// Check if this is a USDC balance
+  bool get isUsdc => assetCode == StellarConfig.usdcCode && 
+    (assetIssuer == StellarConfig.usdcIssuer || assetIssuer == StellarConfig.usdcIssuerTestnet);
+  
+  /// Check if this is a EURC balance
+  bool get isEurc => assetCode == StellarConfig.eurcCode && assetIssuer == StellarConfig.eurcIssuer;
+  
+  /// Check if this is a GNS balance
+  bool get isGns => assetCode == StellarConfig.gnsTokenCode && assetIssuer == StellarConfig.gnsIssuerPublic;
+  
+  /// Get currency symbol for display
+  String get symbol {
+    if (isNative) return 'XLM';
+    if (isUsdc) return '\$';
+    if (isEurc) return '€';
+    if (isGns) return 'GNS';
+    return assetCode;
+  }
+  
+  /// Format balance for display
+  String get displayBalance {
+    if (isUsdc || isEurc) {
+      return '$symbol${amount.toStringAsFixed(2)}';
+    }
+    return '${amount.toStringAsFixed(2)} $assetCode';
+  }
   
   @override
   String toString() => '$assetCode: $balance';
@@ -76,6 +153,26 @@ class TransactionResult {
   final String? error;
   
   TransactionResult({required this.success, this.hash, this.error});
+}
+
+/// Payment result with additional details
+class PaymentResult extends TransactionResult {
+  final String? senderAddress;
+  final String? recipientAddress;
+  final double? amount;
+  final String? assetCode;
+  final DateTime? timestamp;
+  
+  PaymentResult({
+    required bool success,
+    String? hash,
+    String? error,
+    this.senderAddress,
+    this.recipientAddress,
+    this.amount,
+    this.assetCode,
+    this.timestamp,
+  }) : super(success: success, hash: hash, error: error);
 }
 
 class StellarService {
@@ -148,7 +245,6 @@ class StellarService {
   }
   
   /// Fund account - TESTNET ONLY
-  /// On mainnet, accounts are funded via backend airdrop when claiming a @handle
   Future<TransactionResult> fundAccount(String stellarPublicKey) async {
     if (StellarConfig.useTestnet) {
       final success = await fundAccountTestnet(stellarPublicKey);
@@ -157,9 +253,7 @@ class StellarService {
         error: success ? null : 'Friendbot failed',
       );
     } else {
-      // ❌ MAINNET: Cannot fund from client - must use backend airdrop
       debugPrint('❌ Cannot fund account on mainnet from client');
-      debugPrint('   User must claim a @handle to receive XLM airdrop');
       return TransactionResult(
         success: false,
         error: 'Claim a @handle to activate your wallet with XLM',
@@ -194,13 +288,14 @@ class StellarService {
     }
   }
   
-  /// Get GNS token balance specifically
+  // ==================== GNS TOKEN OPERATIONS ====================
+  
+  /// Get GNS token balance
   Future<double> getGnsBalance(String stellarPublicKey) async {
     final balances = await getBalances(stellarPublicKey);
     
     for (final balance in balances) {
-      if (balance.assetCode == StellarConfig.gnsTokenCode &&
-          balance.assetIssuer == StellarConfig.gnsIssuerPublic) {
+      if (balance.isGns) {
         return balance.amount;
       }
     }
@@ -211,10 +306,399 @@ class StellarService {
   /// Check if account has GNS trustline
   Future<bool> hasGnsTrustline(String stellarPublicKey) async {
     final balances = await getBalances(stellarPublicKey);
+    return balances.any((b) => b.isGns);
+  }
+  
+  /// Create GNS trustline
+  Future<TransactionResult> createGnsTrustline({
+    required String stellarPublicKey,
+    required Uint8List privateKeyBytes,
+  }) async {
+    return _createTrustline(
+      stellarPublicKey: stellarPublicKey,
+      privateKeyBytes: privateKeyBytes,
+      assetCode: StellarConfig.gnsTokenCode,
+      assetIssuer: StellarConfig.gnsIssuerPublic,
+    );
+  }
+  
+  // ===========================================
+  // STABLECOIN OPERATIONS (USDC/EURC)
+  // ===========================================
+  
+  /// Get stablecoin balance (USDC or EURC)
+  Future<double> getStablecoinBalance(String stellarPublicKey, Stablecoin coin) async {
+    final balances = await getBalances(stellarPublicKey);
+    final (code, issuer) = StellarConfig.getStablecoinConfig(coin);
     
-    return balances.any((b) =>
-      b.assetCode == StellarConfig.gnsTokenCode &&
-      b.assetIssuer == StellarConfig.gnsIssuerPublic
+    for (final balance in balances) {
+      if (balance.assetCode == code && balance.assetIssuer == issuer) {
+        return balance.amount;
+      }
+    }
+    
+    return 0.0;
+  }
+  
+  /// Get USDC balance specifically
+  Future<double> getUsdcBalance(String stellarPublicKey) async {
+    return getStablecoinBalance(stellarPublicKey, Stablecoin.usdc);
+  }
+  
+  /// Get EURC balance specifically
+  Future<double> getEurcBalance(String stellarPublicKey) async {
+    return getStablecoinBalance(stellarPublicKey, Stablecoin.eurc);
+  }
+  
+  /// Get all stablecoin balances
+  Future<Map<Stablecoin, double>> getAllStablecoinBalances(String stellarPublicKey) async {
+    final balances = await getBalances(stellarPublicKey);
+    
+    return {
+      Stablecoin.usdc: balances.where((b) => b.isUsdc).fold(0.0, (sum, b) => sum + b.amount),
+      Stablecoin.eurc: balances.where((b) => b.isEurc).fold(0.0, (sum, b) => sum + b.amount),
+    };
+  }
+  
+  /// Check if account has stablecoin trustline
+  Future<bool> hasStablecoinTrustline(String stellarPublicKey, Stablecoin coin) async {
+    final balances = await getBalances(stellarPublicKey);
+    final (code, issuer) = StellarConfig.getStablecoinConfig(coin);
+    
+    return balances.any((b) => b.assetCode == code && b.assetIssuer == issuer);
+  }
+  
+  /// Check if account has USDC trustline
+  Future<bool> hasUsdcTrustline(String stellarPublicKey) async {
+    return hasStablecoinTrustline(stellarPublicKey, Stablecoin.usdc);
+  }
+  
+  /// Check if account has EURC trustline
+  Future<bool> hasEurcTrustline(String stellarPublicKey) async {
+    return hasStablecoinTrustline(stellarPublicKey, Stablecoin.eurc);
+  }
+  
+  /// Create stablecoin trustline (USDC or EURC)
+  Future<TransactionResult> createStablecoinTrustline({
+    required String stellarPublicKey,
+    required Uint8List privateKeyBytes,
+    required Stablecoin coin,
+  }) async {
+    final (code, issuer) = StellarConfig.getStablecoinConfig(coin);
+    
+    debugPrint('Creating ${coin.name.toUpperCase()} trustline...');
+    
+    return _createTrustline(
+      stellarPublicKey: stellarPublicKey,
+      privateKeyBytes: privateKeyBytes,
+      assetCode: code,
+      assetIssuer: issuer,
+    );
+  }
+  
+  /// Create USDC trustline
+  Future<TransactionResult> createUsdcTrustline({
+    required String stellarPublicKey,
+    required Uint8List privateKeyBytes,
+  }) async {
+    return createStablecoinTrustline(
+      stellarPublicKey: stellarPublicKey,
+      privateKeyBytes: privateKeyBytes,
+      coin: Stablecoin.usdc,
+    );
+  }
+  
+  /// Create EURC trustline
+  Future<TransactionResult> createEurcTrustline({
+    required String stellarPublicKey,
+    required Uint8List privateKeyBytes,
+  }) async {
+    return createStablecoinTrustline(
+      stellarPublicKey: stellarPublicKey,
+      privateKeyBytes: privateKeyBytes,
+      coin: Stablecoin.eurc,
+    );
+  }
+  
+  /// Create all payment trustlines (USDC + EURC + GNS)
+  Future<TransactionResult> createAllPaymentTrustlines({
+    required String stellarPublicKey,
+    required Uint8List privateKeyBytes,
+  }) async {
+    _ensureInitialized();
+    
+    try {
+      // Check which trustlines are needed
+      final hasUsdc = await hasUsdcTrustline(stellarPublicKey);
+      final hasEurc = await hasEurcTrustline(stellarPublicKey);
+      final hasGns = await hasGnsTrustline(stellarPublicKey);
+      
+      if (hasUsdc && hasEurc && hasGns) {
+        return TransactionResult(success: true, hash: 'All trustlines already exist');
+      }
+      
+      // Create keypair
+      final seedBytes = privateKeyBytes.sublist(0, 32);
+      final keyPair = KeyPair.fromSecretSeedList(seedBytes);
+      
+      // Load account
+      final account = await _sdk.accounts.account(stellarPublicKey);
+      
+      // Build transaction with all needed trustlines
+      final txBuilder = TransactionBuilder(account);
+      
+      if (!hasUsdc) {
+        final (usdcCode, usdcIssuer) = StellarConfig.getStablecoinConfig(Stablecoin.usdc);
+        final usdcAsset = Asset.createNonNativeAsset(usdcCode, usdcIssuer);
+        txBuilder.addOperation(ChangeTrustOperationBuilder(usdcAsset, '922337203685.4775807').build());
+        debugPrint('Adding USDC trustline...');
+      }
+      
+      if (!hasEurc) {
+        final (eurcCode, eurcIssuer) = StellarConfig.getStablecoinConfig(Stablecoin.eurc);
+        final eurcAsset = Asset.createNonNativeAsset(eurcCode, eurcIssuer);
+        txBuilder.addOperation(ChangeTrustOperationBuilder(eurcAsset, '922337203685.4775807').build());
+        debugPrint('Adding EURC trustline...');
+      }
+      
+      if (!hasGns) {
+        final gnsAsset = Asset.createNonNativeAsset(StellarConfig.gnsTokenCode, StellarConfig.gnsIssuerPublic);
+        txBuilder.addOperation(ChangeTrustOperationBuilder(gnsAsset, '922337203685.4775807').build());
+        debugPrint('Adding GNS trustline...');
+      }
+      
+      // Build and sign
+      final transaction = txBuilder.build();
+      transaction.sign(keyPair, StellarConfig.network);
+      
+      // Submit
+      final response = await _sdk.submitTransaction(transaction);
+      
+      if (response.success) {
+        debugPrint('✅ All trustlines created! Hash: ${response.hash}');
+        return TransactionResult(success: true, hash: response.hash);
+      } else {
+        final error = response.extras?.resultCodes?.operationsResultCodes?.join(', ') ?? 'Unknown error';
+        debugPrint('❌ Trustline creation failed: $error');
+        return TransactionResult(success: false, error: error);
+      }
+    } catch (e) {
+      debugPrint('❌ Trustline error: $e');
+      return TransactionResult(success: false, error: e.toString());
+    }
+  }
+  
+  /// Send stablecoin (USDC or EURC) to another user
+  /// This is the main payment method for GNS payments!
+  Future<PaymentResult> sendStablecoin({
+    required String senderStellarPublicKey,
+    required Uint8List senderPrivateKeyBytes,
+    required String recipientStellarPublicKey,
+    required double amount,
+    required Stablecoin coin,
+    String? memo,
+  }) async {
+    _ensureInitialized();
+    
+    final (assetCode, assetIssuer) = StellarConfig.getStablecoinConfig(coin);
+    final symbol = coin == Stablecoin.usdc ? '\$' : '€';
+    
+    try {
+      debugPrint('💸 Sending $symbol${amount.toStringAsFixed(2)} ${coin.name.toUpperCase()}');
+      debugPrint('   From: $senderStellarPublicKey');
+      debugPrint('   To: $recipientStellarPublicKey');
+      
+      // Create keypair from private key bytes
+      final seedBytes = senderPrivateKeyBytes.sublist(0, 32);
+      final keyPair = KeyPair.fromSecretSeedList(seedBytes);
+      
+      // Load sender account
+      final account = await _sdk.accounts.account(senderStellarPublicKey);
+      
+      // Check sender balance
+      final balance = await getStablecoinBalance(senderStellarPublicKey, coin);
+      if (balance < amount) {
+        return PaymentResult(
+          success: false,
+          error: 'Insufficient ${coin.name.toUpperCase()} balance. You have $symbol${balance.toStringAsFixed(2)}.',
+        );
+      }
+      
+      // Check if recipient exists
+      final recipientExists = await accountExists(recipientStellarPublicKey);
+      if (!recipientExists) {
+        return PaymentResult(
+          success: false,
+          error: 'Recipient account does not exist. They need to claim a @handle first.',
+        );
+      }
+      
+      // Check if recipient has trustline
+      final recipientHasTrustline = await hasStablecoinTrustline(recipientStellarPublicKey, coin);
+      
+      // Create asset
+      final asset = Asset.createNonNativeAsset(assetCode, assetIssuer);
+      
+      TransactionBuilder txBuilder;
+      String successMessage;
+      
+      if (recipientHasTrustline) {
+        // ✅ Direct payment - recipient has trustline
+        txBuilder = TransactionBuilder(account)
+            .addOperation(
+              PaymentOperationBuilder(
+                recipientStellarPublicKey,
+                asset,
+                amount.toStringAsFixed(7),
+              ).build(),
+            );
+        successMessage = '${coin.name.toUpperCase()} sent!';
+      } else {
+        // ✅ Claimable balance - recipient doesn't have trustline yet
+        debugPrint('Recipient has no ${coin.name.toUpperCase()} trustline, using claimable balance...');
+        
+        final claimant = Claimant(recipientStellarPublicKey, Claimant.predicateUnconditional());
+        
+        txBuilder = TransactionBuilder(account)
+            .addOperation(
+              CreateClaimableBalanceOperationBuilder(
+                [claimant],
+                asset,
+                amount.toStringAsFixed(7),
+              ).build(),
+            );
+        successMessage = '${coin.name.toUpperCase()} sent as claimable balance!';
+      }
+      
+      // Add memo if provided
+      if (memo != null && memo.isNotEmpty) {
+        txBuilder.addMemo(MemoText(memo.length > 28 ? memo.substring(0, 28) : memo));
+      }
+      
+      // Build and sign transaction
+      final transaction = txBuilder.build();
+      transaction.sign(keyPair, StellarConfig.network);
+      
+      // Submit transaction
+      final response = await _sdk.submitTransaction(transaction);
+      
+      if (response.success) {
+        debugPrint('✅ $successMessage Hash: ${response.hash}');
+        return PaymentResult(
+          success: true,
+          hash: response.hash,
+          senderAddress: senderStellarPublicKey,
+          recipientAddress: recipientStellarPublicKey,
+          amount: amount,
+          assetCode: assetCode,
+          timestamp: DateTime.now(),
+        );
+      } else {
+        final error = response.extras?.resultCodes?.operationsResultCodes?.join(', ') ?? 'Unknown error';
+        debugPrint('❌ Payment failed: $error');
+        return PaymentResult(success: false, error: error);
+      }
+    } catch (e) {
+      debugPrint('❌ Send stablecoin error: $e');
+      return PaymentResult(success: false, error: e.toString());
+    }
+  }
+  
+  /// Send USDC specifically
+  Future<PaymentResult> sendUsdc({
+    required String senderStellarPublicKey,
+    required Uint8List senderPrivateKeyBytes,
+    required String recipientStellarPublicKey,
+    required double amount,
+    String? memo,
+  }) async {
+    return sendStablecoin(
+      senderStellarPublicKey: senderStellarPublicKey,
+      senderPrivateKeyBytes: senderPrivateKeyBytes,
+      recipientStellarPublicKey: recipientStellarPublicKey,
+      amount: amount,
+      coin: Stablecoin.usdc,
+      memo: memo,
+    );
+  }
+  
+  /// Send EURC specifically
+  Future<PaymentResult> sendEurc({
+    required String senderStellarPublicKey,
+    required Uint8List senderPrivateKeyBytes,
+    required String recipientStellarPublicKey,
+    required double amount,
+    String? memo,
+  }) async {
+    return sendStablecoin(
+      senderStellarPublicKey: senderStellarPublicKey,
+      senderPrivateKeyBytes: senderPrivateKeyBytes,
+      recipientStellarPublicKey: recipientStellarPublicKey,
+      amount: amount,
+      coin: Stablecoin.eurc,
+      memo: memo,
+    );
+  }
+  
+  /// Send stablecoin to a GNS public key (hex) - converts automatically
+  Future<PaymentResult> sendStablecoinToGnsKey({
+    required String senderStellarPublicKey,
+    required Uint8List senderPrivateKeyBytes,
+    required String recipientGnsPublicKey,
+    required double amount,
+    required Stablecoin coin,
+    String? memo,
+  }) async {
+    // Convert GNS key to Stellar address
+    final recipientStellarKey = gnsKeyToStellar(recipientGnsPublicKey);
+    
+    return sendStablecoin(
+      senderStellarPublicKey: senderStellarPublicKey,
+      senderPrivateKeyBytes: senderPrivateKeyBytes,
+      recipientStellarPublicKey: recipientStellarKey,
+      amount: amount,
+      coin: coin,
+      memo: memo,
+    );
+  }
+  
+  /// Send payment by currency code string (for UI convenience)
+  /// Accepts "USDC", "EURC", "EUR", "USD"
+  Future<PaymentResult> sendPayment({
+    required String senderStellarPublicKey,
+    required Uint8List senderPrivateKeyBytes,
+    required String recipientStellarPublicKey,
+    required double amount,
+    required String currency,
+    String? memo,
+  }) async {
+    // Map common currency codes to stablecoins
+    Stablecoin coin;
+    switch (currency.toUpperCase()) {
+      case 'USDC':
+      case 'USD':
+      case '\$':
+        coin = Stablecoin.usdc;
+        break;
+      case 'EURC':
+      case 'EUR':
+      case '€':
+        coin = Stablecoin.eurc;
+        break;
+      default:
+        return PaymentResult(
+          success: false,
+          error: 'Unsupported currency: $currency. Use USDC or EURC.',
+        );
+    }
+    
+    return sendStablecoin(
+      senderStellarPublicKey: senderStellarPublicKey,
+      senderPrivateKeyBytes: senderPrivateKeyBytes,
+      recipientStellarPublicKey: recipientStellarPublicKey,
+      amount: amount,
+      coin: coin,
+      memo: memo,
     );
   }
   
@@ -232,7 +716,6 @@ class StellarService {
         String assetCode = 'XLM';
         String assetIssuer = '';
         
-        // Handle Asset object from SDK
         final asset = r.asset;
         if (asset is AssetTypeCreditAlphaNum) {
           assetCode = asset.code;
@@ -253,64 +736,20 @@ class StellarService {
     }
   }
   
-  /// Get GNS claimable balances specifically
+  /// Get GNS claimable balances
   Future<List<ClaimableBalance>> getGnsClaimableBalances(String stellarPublicKey) async {
     final all = await getClaimableBalances(stellarPublicKey);
-    
-    return all.where((cb) =>
-      cb.assetCode == StellarConfig.gnsTokenCode &&
-      cb.assetIssuer == StellarConfig.gnsIssuerPublic
+    return all.where((b) =>
+      b.assetCode == StellarConfig.gnsTokenCode &&
+      b.assetIssuer == StellarConfig.gnsIssuerPublic
     ).toList();
   }
   
-  // ==================== TRANSACTION OPERATIONS ====================
-  
-  /// Create GNS trustline (required before receiving GNS tokens)
-  Future<TransactionResult> createGnsTrustline({
-    required String stellarPublicKey,
-    required Uint8List privateKeyBytes,
-  }) async {
-    _ensureInitialized();
-    
-    try {
-      debugPrint('Creating GNS trustline for $stellarPublicKey');
-      
-      // Create keypair from private key bytes (first 32 bytes = seed)
-      final seedBytes = privateKeyBytes.sublist(0, 32);
-      final keyPair = KeyPair.fromSecretSeedList(seedBytes);
-      
-      // Load account
-      final account = await _sdk.accounts.account(stellarPublicKey);
-      
-      // Create GNS asset
-      final gnsAsset = Asset.createNonNativeAsset(
-        StellarConfig.gnsTokenCode,
-        StellarConfig.gnsIssuerPublic,
-      );
-      
-      // Build transaction
-      final transaction = TransactionBuilder(account)
-          .addOperation(ChangeTrustOperationBuilder(gnsAsset, '10000000000').build())
-          .build();
-      
-      // Sign transaction
-      transaction.sign(keyPair, StellarConfig.network);
-      
-      // Submit transaction
-      final response = await _sdk.submitTransaction(transaction);
-      
-      if (response.success) {
-        debugPrint('Trustline created! Hash: ${response.hash}');
-        return TransactionResult(success: true, hash: response.hash);
-      } else {
-        final error = response.extras?.resultCodes?.operationsResultCodes?.join(', ') ?? 'Unknown error';
-        debugPrint('Trustline failed: $error');
-        return TransactionResult(success: false, error: error);
-      }
-    } catch (e) {
-      debugPrint('Trustline error: $e');
-      return TransactionResult(success: false, error: e.toString());
-    }
+  /// Get stablecoin claimable balances
+  Future<List<ClaimableBalance>> getStablecoinClaimableBalances(String stellarPublicKey, Stablecoin coin) async {
+    final all = await getClaimableBalances(stellarPublicKey);
+    final (code, issuer) = StellarConfig.getStablecoinConfig(coin);
+    return all.where((b) => b.assetCode == code && b.assetIssuer == issuer).toList();
   }
   
   /// Claim a claimable balance
@@ -322,112 +761,68 @@ class StellarService {
     _ensureInitialized();
     
     try {
-      debugPrint('Claiming balance $balanceId for $stellarPublicKey');
-      
-      // Create keypair from private key bytes (first 32 bytes = seed)
       final seedBytes = privateKeyBytes.sublist(0, 32);
       final keyPair = KeyPair.fromSecretSeedList(seedBytes);
       
-      // Load account
       final account = await _sdk.accounts.account(stellarPublicKey);
       
-      // Build claim transaction
       final transaction = TransactionBuilder(account)
           .addOperation(ClaimClaimableBalanceOperationBuilder(balanceId).build())
           .build();
       
-      // Sign transaction
       transaction.sign(keyPair, StellarConfig.network);
       
-      // Submit transaction
       final response = await _sdk.submitTransaction(transaction);
       
       if (response.success) {
-        debugPrint('Balance claimed! Hash: ${response.hash}');
+        debugPrint('✅ Balance claimed! Hash: ${response.hash}');
         return TransactionResult(success: true, hash: response.hash);
       } else {
         final error = response.extras?.resultCodes?.operationsResultCodes?.join(', ') ?? 'Unknown error';
-        debugPrint('Claim failed: $error');
+        debugPrint('❌ Claim failed: $error');
         return TransactionResult(success: false, error: error);
       }
     } catch (e) {
-      debugPrint('Claim error: $e');
+      debugPrint('❌ Claim error: $e');
       return TransactionResult(success: false, error: e.toString());
     }
   }
   
-  /// Create trustline AND claim all GNS balances in one flow
-  /// FIXED: No longer tries to auto-fund on mainnet
+  /// Claim all GNS tokens (alias for claimAllPendingBalances)
+  /// Kept for backward compatibility with existing screens
   Future<TransactionResult> claimAllGnsTokens({
+    required String stellarPublicKey,
+    required Uint8List privateKeyBytes,
+  }) async {
+    return claimAllPendingBalances(
+      stellarPublicKey: stellarPublicKey,
+      privateKeyBytes: privateKeyBytes,
+    );
+  }
+  
+  /// Claim all pending stablecoin and GNS balances
+  Future<TransactionResult> claimAllPendingBalances({
     required String stellarPublicKey,
     required Uint8List privateKeyBytes,
   }) async {
     _ensureInitialized();
     
     try {
-      // First check if account exists
-      final exists = await accountExists(stellarPublicKey);
+      // First ensure all trustlines exist
+      await createAllPaymentTrustlines(
+        stellarPublicKey: stellarPublicKey,
+        privateKeyBytes: privateKeyBytes,
+      );
       
-      if (!exists) {
-        // ❌ MAINNET: Cannot fund from client
-        if (!StellarConfig.useTestnet) {
-          debugPrint('❌ Account not funded - user needs to claim @handle first');
-          return TransactionResult(
-            success: false,
-            error: 'Account not activated. Claim a @handle to receive XLM airdrop first!',
-          );
-        }
-        
-        // ✅ TESTNET: Use friendbot
-        debugPrint('Account does not exist, funding via friendbot...');
-        final fundResult = await fundAccount(stellarPublicKey);
-        
-        if (!fundResult.success) {
-          return TransactionResult(
-            success: false,
-            error: 'Failed to fund account: ${fundResult.error}',
-          );
-        }
-        debugPrint('✅ Account funded!');
-        
-        // Wait a moment for the ledger to update
-        await Future.delayed(const Duration(seconds: 2));
-      }
-      
-      // Now check if trustline exists
-      final hasTrustline = await hasGnsTrustline(stellarPublicKey);
-      
-      if (!hasTrustline) {
-        debugPrint('Creating trustline...');
-        final trustResult = await createGnsTrustline(
-          stellarPublicKey: stellarPublicKey,
-          privateKeyBytes: privateKeyBytes,
-        );
-        
-        if (!trustResult.success) {
-          return TransactionResult(
-            success: false,
-            error: 'Failed to create trustline: ${trustResult.error}',
-          );
-        }
-        debugPrint('✅ Trustline created!');
-      }
-      
-      // Get claimable balances
-      final claimable = await getGnsClaimableBalances(stellarPublicKey);
+      // Get all claimable balances
+      final claimable = await getClaimableBalances(stellarPublicKey);
       
       if (claimable.isEmpty) {
-        return TransactionResult(
-          success: true,
-          error: 'No GNS tokens to claim',
-        );
+        return TransactionResult(success: true, hash: 'No balances to claim');
       }
       
-      // Claim each balance
-      double totalClaimed = 0;
+      int claimed = 0;
       for (final balance in claimable) {
-        debugPrint('Claiming ${balance.amount} GNS...');
-        
         final result = await claimBalance(
           stellarPublicKey: stellarPublicKey,
           privateKeyBytes: privateKeyBytes,
@@ -435,26 +830,23 @@ class StellarService {
         );
         
         if (result.success) {
-          totalClaimed += double.tryParse(balance.amount) ?? 0;
-        } else {
-          debugPrint('Failed to claim: ${result.error}');
+          claimed++;
+          debugPrint('Claimed ${balance.amount} ${balance.assetCode}');
         }
       }
       
       return TransactionResult(
-        success: true,
-        hash: 'Claimed ${totalClaimed.toStringAsFixed(2)} GNS',
+        success: claimed > 0,
+        hash: 'Claimed $claimed balances',
       );
     } catch (e) {
-      debugPrint('Claim all error: $e');
       return TransactionResult(success: false, error: e.toString());
     }
   }
   
-  // ==================== SEND GNS ====================
+  // ==================== SEND GNS (existing) ====================
   
   /// Send GNS tokens to another user
-  /// If recipient doesn't have a trustline, uses claimable balance instead
   Future<TransactionResult> sendGns({
     required String senderStellarPublicKey,
     required Uint8List senderPrivateKeyBytes,
@@ -466,14 +858,11 @@ class StellarService {
     try {
       debugPrint('Sending $amount GNS from $senderStellarPublicKey to $recipientStellarPublicKey');
       
-      // Create keypair from private key bytes (first 32 bytes = seed)
       final seedBytes = senderPrivateKeyBytes.sublist(0, 32);
       final keyPair = KeyPair.fromSecretSeedList(seedBytes);
       
-      // Load sender account
       final account = await _sdk.accounts.account(senderStellarPublicKey);
       
-      // Check sender balance
       final balance = await getGnsBalance(senderStellarPublicKey);
       if (balance < amount) {
         return TransactionResult(
@@ -482,10 +871,8 @@ class StellarService {
         );
       }
       
-      // Check if recipient has trustline
       final recipientHasTrustline = await hasGnsTrustline(recipientStellarPublicKey);
       
-      // Create GNS asset
       final gnsAsset = Asset.createNonNativeAsset(
         StellarConfig.gnsTokenCode,
         StellarConfig.gnsIssuerPublic,
@@ -495,7 +882,6 @@ class StellarService {
       String successMessage;
       
       if (recipientHasTrustline) {
-        // ✅ Direct payment - recipient has trustline
         txBuilder = TransactionBuilder(account)
             .addOperation(
               PaymentOperationBuilder(
@@ -506,10 +892,8 @@ class StellarService {
             );
         successMessage = 'GNS sent!';
       } else {
-        // ✅ Claimable balance - recipient doesn't have trustline yet
         debugPrint('Recipient has no trustline, using claimable balance...');
         
-        // Create claimant with unconditional predicate (can claim anytime)
         final claimant = Claimant(recipientStellarPublicKey, Claimant.predicateUnconditional());
         
         txBuilder = TransactionBuilder(account)
@@ -520,14 +904,12 @@ class StellarService {
                 amount.toStringAsFixed(7),
               ).build(),
             );
-        successMessage = 'GNS sent as claimable balance! Recipient will receive when they set up their wallet.';
+        successMessage = 'GNS sent as claimable balance!';
       }
       
-      // Build and sign transaction
       final transaction = txBuilder.build();
       transaction.sign(keyPair, StellarConfig.network);
       
-      // Submit transaction
       final response = await _sdk.submitTransaction(transaction);
       
       if (response.success) {
@@ -544,14 +926,13 @@ class StellarService {
     }
   }
   
-  /// Send GNS to a GNS public key (converts to Stellar address automatically)
+  /// Send GNS to a GNS public key
   Future<TransactionResult> sendGnsToGnsKey({
     required String senderStellarPublicKey,
     required Uint8List senderPrivateKeyBytes,
     required String recipientGnsPublicKey,
     required double amount,
   }) async {
-    // Convert GNS key to Stellar address
     final recipientStellarKey = gnsKeyToStellar(recipientGnsPublicKey);
     
     return sendGns(
@@ -561,8 +942,49 @@ class StellarService {
       amount: amount,
     );
   }
-
-  // ==================== HELPER FUNCTIONS ====================
+  
+  // ==================== INTERNAL HELPERS ====================
+  
+  /// Create a trustline for any asset
+  Future<TransactionResult> _createTrustline({
+    required String stellarPublicKey,
+    required Uint8List privateKeyBytes,
+    required String assetCode,
+    required String assetIssuer,
+  }) async {
+    _ensureInitialized();
+    
+    try {
+      final seedBytes = privateKeyBytes.sublist(0, 32);
+      final keyPair = KeyPair.fromSecretSeedList(seedBytes);
+      
+      final account = await _sdk.accounts.account(stellarPublicKey);
+      
+      final asset = Asset.createNonNativeAsset(assetCode, assetIssuer);
+      
+      final transaction = TransactionBuilder(account)
+          .addOperation(
+            ChangeTrustOperationBuilder(asset, '922337203685.4775807').build(),
+          )
+          .build();
+      
+      transaction.sign(keyPair, StellarConfig.network);
+      
+      final response = await _sdk.submitTransaction(transaction);
+      
+      if (response.success) {
+        debugPrint('✅ Trustline created for $assetCode! Hash: ${response.hash}');
+        return TransactionResult(success: true, hash: response.hash);
+      } else {
+        final error = response.extras?.resultCodes?.operationsResultCodes?.join(', ') ?? 'Unknown error';
+        debugPrint('❌ Trustline failed: $error');
+        return TransactionResult(success: false, error: error);
+      }
+    } catch (e) {
+      debugPrint('❌ Trustline error: $e');
+      return TransactionResult(success: false, error: e.toString());
+    }
+  }
   
   Uint8List _hexToBytes(String hex) {
     final result = Uint8List(hex.length ~/ 2);
@@ -573,7 +995,7 @@ class StellarService {
   }
 }
 
-/// Extension to add Stellar functionality
+/// Extension to add Stellar functionality to strings
 extension StellarWalletExtension on String {
   /// Convert GNS hex public key to Stellar address
   String toStellarAddress() {

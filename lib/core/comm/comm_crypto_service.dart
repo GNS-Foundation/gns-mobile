@@ -344,16 +344,21 @@ class CommCryptoService {
       );
       final sharedBytes = await sharedSecret.extractBytes();
 
-      // Derive encryption key with HKDF
-      final algorithm = Hkdf(
-        hmac: Hmac(Sha256()),
-        outputLength: 32,
-      );
-      final derivedKey = await algorithm.deriveKey(
-        secretKey: SecretKey(sharedBytes),
-        nonce: [],
-        info: utf8.encode(_hkdfInfo),
-      );
+    final infoBytes = Uint8List.fromList([
+      ...utf8.encode('$_hkdfInfo:'),
+      ...ephemeralPublic.bytes,
+      ...recipientPublicKey,
+    ]);
+    
+    final algorithm = Hkdf(
+      hmac: Hmac(Sha256()),
+      outputLength: 32,
+    );
+    final derivedKey = await algorithm.deriveKey(
+      secretKey: SecretKey(sharedBytes),
+      nonce: [],
+      info: infoBytes,
+    );
       final keyBytes = await derivedKey.extractBytes();
 
       // Generate nonce
@@ -499,7 +504,15 @@ class CommCryptoService {
       debugPrint('   🔑 Ephemeral public: ${_bytesToHex(ephemeralPublicBytes).substring(0, 16)}...');
       debugPrint('   🔑 Shared secret: ${_bytesToHex(Uint8List.fromList(sharedBytes)).substring(0, 16)}...');
 
-      // Derive decryption key
+      // Derive decryption key with HKDF
+      // ✅ CRITICAL: Info MUST include ephemeral + recipient (YOUR) public keys!
+      // Format: "gns-envelope-v1:" + ephemeralPub (32 bytes) + recipientPub (32 bytes)
+      final infoBytes = Uint8List.fromList([
+        ...utf8.encode('$_hkdfInfo:'),
+        ...ephemeralPublicBytes,
+        ...recipientPublicKey,  // YOUR X25519 public key
+      ]);
+      
       final algorithm = Hkdf(
         hmac: Hmac(Sha256()),
         outputLength: 32,
@@ -507,7 +520,7 @@ class CommCryptoService {
       final derivedKey = await algorithm.deriveKey(
         secretKey: SecretKey(sharedBytes),
         nonce: [],
-        info: utf8.encode(_hkdfInfo),
+        info: infoBytes,
       );
       final keyBytes = await derivedKey.extractBytes();
 

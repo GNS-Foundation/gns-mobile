@@ -13,6 +13,7 @@ class GnsApiClient {
 
   // Default GNS Node URL - Railway deployment
   static const String defaultNodeUrl = 'https://gns-browser-production.up.railway.app';
+  // static const String defaultNodeUrl = 'http://192.168.1.223:3000'; // Local Dev Server
   
   late Dio _dio;
   String _nodeUrl = defaultNodeUrl;

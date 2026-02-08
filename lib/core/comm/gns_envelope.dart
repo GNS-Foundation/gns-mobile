@@ -161,6 +161,7 @@ class GnsEnvelope {
     'id': id,
     'version': version,
     'fromPublicKey': fromPublicKey,
+    'fromHandle': fromHandle,  // ✅ FIX: Must include fromHandle for echo bot signatures!
     'toPublicKeys': toPublicKeys,
     'ccPublicKeys': ccPublicKeys,
     'payloadType': payloadType,

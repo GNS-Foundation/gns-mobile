@@ -20,6 +20,7 @@ import 'payload_types.dart';
 import 'comm_crypto_service.dart';
 import 'message_storage.dart';
 import 'relay_channel.dart';  // ✅ NEW: Use RelayChannel
+import '../calls/call_service.dart';
 import '../gns/identity_wallet.dart';
 
 /// Result of sending a message
@@ -118,6 +119,12 @@ class CommunicationService {
         onMessageReceived?.call(message);
       }
     });
+
+    // ✅ Route incoming call signals to CallService
+    _relayChannel.callSignalStream.listen((json) {
+      final type = json['type'] as String;
+      CallService().handleCallSignal(type, json);
+    });
   }
 
   /// Get or create singleton instance
@@ -187,6 +194,12 @@ class CommunicationService {
       
       // Connect to WebSocket via RelayChannel
       await connect();
+
+      // ✅ Wire CallService to WebSocket
+      await CallService().initialize(
+        publicKey: _wallet.publicKey!,
+        sendRaw: _relayChannel.sendRaw,
+      );
       
       // ✅ NEW: Sync messages from server
       await syncMessages();
@@ -514,6 +527,9 @@ class CommunicationService {
   Future<GnsMessage?> _handleIncomingEnvelope(GnsEnvelope envelope) async {
     try {
       debugPrint('📨 Processing envelope from ${envelope.fromPublicKey.substring(0, 8)}...');
+      debugPrint('   📧 PayloadType: ${envelope.payloadType}');
+      debugPrint('   📧 isEmail: ${envelope.payloadType == PayloadType.email}');
+      debugPrint('   📧 fromGateway: ${envelope.fromPublicKey.toLowerCase() == '007dd9b2c19308dd0e2dfc044da05a522a1d1adbd6f1c84147cc4e0b7a4bd53d'}');
       
       // Verify signature first
       final senderPubKeyBytes = _hexToBytes(envelope.fromPublicKey);
@@ -556,7 +572,7 @@ class CommunicationService {
       final decrypted = await _crypto.decrypt(
         envelope: envelope,
         recipientPrivateKey: _wallet.encryptionPrivateKeyBytes!,
-        recipientPublicKey: senderEncryptionKeyBytes,
+        recipientPublicKey: _wallet.encryptionPublicKeyBytes!,  // ✅ CRITICAL: YOUR X25519 public key for HKDF!
       );
       
       if (!decrypted.success || decrypted.payload == null) {

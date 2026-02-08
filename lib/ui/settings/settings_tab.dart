@@ -22,6 +22,10 @@ import '../financial/financial_settings_screen.dart';
 import '../financial/transactions_screen.dart';
 import '../messages/broadcast_screen.dart';
 import '../screens/org_registration_screen.dart';  // 🏢 Organization Registration
+import '../merchant/merchant_terminal_screen.dart';
+import '../debug/org_verification_test_screen.dart';
+import '../../core/org/org_service.dart';
+import '../screens/my_organizations_screen.dart';
 
 // ==================== SETTINGS TAB ====================
 
@@ -43,6 +47,9 @@ class _SettingsTabState extends State<SettingsTab> {
   
   int _paymentEndpointCount = 0;
   String? _handle;
+  final _orgService = OrgService.instance;
+  int _pendingOrgCount = 0;
+  int _activeOrgCount = 0;
 
   /// Get the user's handle
   String get _userHandle => _handle ?? 'you';
@@ -54,6 +61,7 @@ class _SettingsTabState extends State<SettingsTab> {
     _loadHandle();
     _loadFacets();
     _loadPaymentInfo();
+    _loadOrgInfo();
   }
 
   Future<void> _loadHandle() async {
@@ -140,27 +148,8 @@ class _SettingsTabState extends State<SettingsTab> {
           const SizedBox(height: 24),
 
           // 🏢 Organization Registration
-          Card(
-            child: ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.purple.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(Icons.business, color: Colors.purple),
-              ),
-              title: const Text('Register Organization'),
-              subtitle: const Text('Claim your namespace@ with DNS verification'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const OrgRegistrationScreen()),
-                );
-              },
-            ),
-          ),
+          // 🏢 Organization Registration / My Organizations
+          _buildOrganizationsSection(),
           const SizedBox(height: 16),
 
           Card(
@@ -174,6 +163,48 @@ class _SettingsTabState extends State<SettingsTab> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const DebugScreen()),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 📱 NFC Merchant Terminal
+          Card(
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.point_of_sale, color: Colors.green),
+              ),
+              title: const Text('Merchant Terminal'),
+              subtitle: const Text('Accept NFC payments'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const MerchantTerminalScreen()),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 🔬 Org Verification Test
+          Card(
+            color: Colors.orange.withOpacity(0.1),
+            child: ListTile(
+              leading: const Icon(Icons.science, color: Colors.orange),
+              title: const Text('Org Verification Test'),
+              subtitle: const Text('Test DNS TXT verification flow'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const OrgVerificationTestScreen()),
                 );
               },
             ),
@@ -878,5 +909,71 @@ class _SettingsTabState extends State<SettingsTab> {
         ],
       ),
     );
+  }
+  Widget _buildOrganizationsSection() {
+    final hasOrgs = _pendingOrgCount > 0 || _activeOrgCount > 0;
+    
+    return Card(
+      child: ListTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.purple.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.business, color: Colors.purple),
+        ),
+        title: const Text('My Organizations'),
+        subtitle: hasOrgs
+            ? Text(
+                '${_activeOrgCount > 0 ? "$_activeOrgCount active" : ""}'
+                '${_activeOrgCount > 0 && _pendingOrgCount > 0 ? " • " : ""}'
+                '${_pendingOrgCount > 0 ? "$_pendingOrgCount pending" : ""}',
+              )
+            : const Text('Register your organization namespace'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_pendingOrgCount > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.orange,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '$_pendingOrgCount',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => MyOrganizationsScreen(wallet: widget.wallet),
+            ),
+          ).then((_) => _loadOrgInfo());
+        },
+      ),
+    );
+  }
+
+  Future<void> _loadOrgInfo() async {
+    await _orgService.initialize();
+    if (mounted) {
+      setState(() {
+        _pendingOrgCount = _orgService.pendingRegistrations.length + 
+                          _orgService.verifiedRegistrations.length;
+        _activeOrgCount = _orgService.activeRegistrations.length;
+      });
+    }
   }
 }
