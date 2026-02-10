@@ -355,4 +355,202 @@ class GnsApiClient {
       return {'success': false, 'error': e.message};
     }
   }
+
+  // ==================== PAYMENTS V2 (STRIPE-LIKE) ====================
+
+  /// Create a payment request
+  Future<Map<String, dynamic>> createPaymentRequest({
+    required String publicKey,
+    required String signature,
+    required String timestamp,
+    required Map<String, dynamic> request,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/v1/payments/request',
+        data: request,
+        options: Options(headers: {
+          'X-GNS-PublicKey': publicKey,
+          'X-GNS-Signature': signature,
+          'X-GNS-Timestamp': timestamp,
+        }),
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      debugPrint('Create payment request failed: ${e.response?.data}');
+      if (e.response != null) {
+        return e.response!.data as Map<String, dynamic>;
+      }
+      return {'success': false, 'error': e.message};
+    }
+  }
+
+  /// Get a payment request by ID
+  Future<Map<String, dynamic>> getPaymentRequest(String paymentId) async {
+    try {
+      final response = await _dio.get('/v1/payments/$paymentId');
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        return {'success': false, 'error': 'Payment request not found'};
+      }
+      return {'success': false, 'error': e.message};
+    }
+  }
+
+  /// Pay a payment request
+  Future<Map<String, dynamic>> payPaymentRequest({
+    required String paymentId,
+    required String publicKey,
+    required String signature,
+    required String timestamp,
+    required String stellarTxHash,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/v1/payments/$paymentId/pay',
+        data: {
+          'stellar_tx_hash': stellarTxHash,
+          'signature': signature, // Payment-specific signature
+        },
+        options: Options(headers: {
+          'X-GNS-PublicKey': publicKey,
+          'X-GNS-Signature': signature, // Auth signature (reused or separate)
+          'X-GNS-Timestamp': timestamp,
+        }),
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      debugPrint('Pay request failed: ${e.response?.data}');
+      if (e.response != null) {
+        return e.response!.data as Map<String, dynamic>;
+      }
+      return {'success': false, 'error': e.message};
+    }
+  }
+
+  /// Cancel a payment request
+  Future<Map<String, dynamic>> cancelPaymentRequest({
+    required String paymentId,
+    required String publicKey,
+    required String signature,
+    required String timestamp,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/v1/payments/$paymentId/cancel',
+        options: Options(headers: {
+          'X-GNS-PublicKey': publicKey,
+          'X-GNS-Signature': signature,
+          'X-GNS-Timestamp': timestamp,
+        }),
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      return {'success': false, 'error': e.message};
+    }
+  }
+
+  // ==================== VERIFICATION (PROOF OF HUMANITY) ====================
+
+  /// Get verification status
+  Future<Map<String, dynamic>> getVerificationStatus(String identifier) async {
+    try {
+      final response = await _dio.get('/v1/verify/$identifier');
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        return {'success': false, 'error': 'Identity not found'};
+      }
+      return {'success': false, 'error': e.message};
+    }
+  }
+
+  /// Create verification challenge
+  Future<Map<String, dynamic>> createVerificationChallenge({
+    required String publicKey,
+    bool requireFreshBreadcrumb = false,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/v1/verify/challenge',
+        data: {
+          'public_key': publicKey,
+          'require_fresh_breadcrumb': requireFreshBreadcrumb,
+        },
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      debugPrint('Create challenge failed: ${e.response?.data}');
+      if (e.response != null) {
+        return e.response!.data as Map<String, dynamic>;
+      }
+      return {'success': false, 'error': e.message};
+    }
+  }
+
+  /// Submit verification challenge
+  Future<Map<String, dynamic>> submitVerificationChallenge({
+    required String challengeId,
+    required String publicKey,
+    required String signature,
+    Map<String, dynamic>? freshBreadcrumb,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/v1/verify/challenge/$challengeId',
+        data: {
+          'public_key': publicKey,
+          'signature': signature,
+          if (freshBreadcrumb != null) 'fresh_breadcrumb': freshBreadcrumb,
+        },
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      debugPrint('Submit challenge failed: ${e.response?.data}');
+      if (e.response != null) {
+        return e.response!.data as Map<String, dynamic>;
+      }
+      return {'success': false, 'error': e.message};
+    }
+  }
+
+  // ==================== MERCHANTS ====================
+
+  /// Register as a merchant
+  Future<Map<String, dynamic>> registerMerchant(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/merchant/register', data: data);
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      debugPrint('Register merchant failed: ${e.response?.data}');
+      if (e.response != null) {
+        return e.response!.data as Map<String, dynamic>;
+      }
+      return {'success': false, 'error': e.message};
+    }
+  }
+
+  /// Settle payment (NFC flow)
+  Future<Map<String, dynamic>> settlePayment({
+    required String publicKey,
+    required Map<String, dynamic> settlementData,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/merchant/settle',
+        data: settlementData,
+        options: Options(headers: {
+          'X-GNS-PublicKey': publicKey,
+        }),
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      debugPrint('Settle payment failed: ${e.response?.data}');
+      if (e.response != null) {
+        return e.response!.data as Map<String, dynamic>;
+      }
+      return {'success': false, 'error': e.message};
+    }
+  }
 }

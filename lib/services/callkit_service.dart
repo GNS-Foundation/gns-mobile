@@ -236,8 +236,8 @@ class CallKitService {
       case Event.actionCallAccept:
         // User tapped Accept ✅
         debugPrint('   Call accepted!');
-        final data = event.body as Map<String, dynamic>? ?? {};
-        final extra = data['extra'] as Map<String, dynamic>? ?? {};
+        final data = (event.body as Map?)?.cast<String, dynamic>() ?? {};
+        final extra = (data['extra'] as Map?)?.cast<String, dynamic>() ?? {};
         _currentCallId = data['id'] as String?;
         onCallAccepted?.call({
           'callId': data['id'],
@@ -250,8 +250,8 @@ class CallKitService {
       case Event.actionCallDecline:
         // User tapped Decline ❌
         debugPrint('   Call declined');
-        final data = event.body as Map<String, dynamic>? ?? {};
-        final extra = data['extra'] as Map<String, dynamic>? ?? {};
+        final data = (event.body as Map?)?.cast<String, dynamic>() ?? {};
+        final extra = (data['extra'] as Map?)?.cast<String, dynamic>() ?? {};
         onCallDeclined?.call({
           'callId': data['id'],
           'callerPublicKey': extra['callerPublicKey'],
@@ -262,7 +262,7 @@ class CallKitService {
       case Event.actionCallEnded:
         // Call ended (either party)
         debugPrint('   Call ended');
-        final data = event.body as Map<String, dynamic>? ?? {};
+        final data = (event.body as Map?)?.cast<String, dynamic>() ?? {};
         onCallEnded?.call({
           'callId': data['id'],
         });
@@ -272,7 +272,7 @@ class CallKitService {
       case Event.actionCallTimeout:
         // Ring timed out — no answer
         debugPrint('   Call timed out');
-        final data = event.body as Map<String, dynamic>? ?? {};
+        final data = (event.body as Map?)?.cast<String, dynamic>() ?? {};
         onCallDeclined?.call({
           'callId': data['id'],
           'reason': 'timeout',

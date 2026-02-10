@@ -17,13 +17,14 @@ import '../../core/financial/payment_service.dart';
 import '../../core/theme/theme_service.dart';
 import '../screens/facet_list_screen.dart';
 import '../screens/facet_editor_screen.dart';
-import '../screens/debug_screen.dart';
+// import '../screens/debug_screen.dart';  // Developer Tools — disabled for standard release
 import '../financial/financial_settings_screen.dart';
 import '../financial/transactions_screen.dart';
 import '../messages/broadcast_screen.dart';
 import '../screens/org_registration_screen.dart';  // 🏢 Organization Registration
 import '../merchant/merchant_terminal_screen.dart';
-import '../debug/org_verification_test_screen.dart';
+// import '../debug/org_verification_test_screen.dart';  // Disabled for standard release
+// import '../screens/identity_claims_screen.dart';  // TODO: uncomment when file is added
 import '../../core/org/org_service.dart';
 import '../screens/my_organizations_screen.dart';
 
@@ -147,104 +148,74 @@ class _SettingsTabState extends State<SettingsTab> {
           _buildThemeSection(),
           const SizedBox(height: 24),
 
-          // 🏢 Organization Registration
-          // 🏢 Organization Registration / My Organizations
+
+          // ========== IDENTITY & ORGANIZATIONS ==========
+
+          // 🆔 Identity Claims (Cross-Platform Verification)
+          Card(
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF0EA5E9), Color(0xFF8B5CF6)],
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.verified_user, color: Colors.white, size: 20),
+              ),
+              title: const Text('Identity Claims'),
+              subtitle: Text(
+                'Link Twitter, Instagram, GitHub & more to @$_userHandle',
+                style: const TextStyle(fontSize: 12),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                // TODO: uncomment when identity_claims_screen.dart is added
+                // Navigator.push(
+                //   context,
+                //   MaterialPageRoute(builder: (_) => const IdentityClaimsScreen()),
+                // );
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Identity Claims — coming soon!')),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 🏢 My Organizations (uses existing _buildOrganizationsSection)
           _buildOrganizationsSection(),
           const SizedBox(height: 16),
 
-          Card(
-            color: Colors.deepPurple.withValues(alpha: 0.1),
-            child: ListTile(
-              leading: const Icon(Icons.bug_report, color: Colors.deepPurple),
-              title: const Text('Developer Tools'),
-              subtitle: const Text('Debug & publish GNS record'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const DebugScreen()),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // 📱 NFC Merchant Terminal
-          Card(
-            child: ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(Icons.point_of_sale, color: Colors.green),
-              ),
-              title: const Text('Merchant Terminal'),
-              subtitle: const Text('Accept NFC payments'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const MerchantTerminalScreen()),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // 🔬 Org Verification Test
-          Card(
-            color: Colors.orange.withOpacity(0.1),
-            child: ListTile(
-              leading: const Icon(Icons.science, color: Colors.orange),
-              title: const Text('Org Verification Test'),
-              subtitle: const Text('Test DNS TXT verification flow'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const OrgVerificationTestScreen()),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // 🏠 Home Hub Pairing (Coming Soon - replaces dangerous key export)
-          Card(
-            child: ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.teal.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(Icons.home, color: Colors.teal),
-              ),
-              title: const Text('Home Hub Pairing'),
-              subtitle: const Text('Sync identity to Raspberry Pi, TV, or backup device'),
-              trailing: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text(
-                  'Coming Soon',
-                  style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600),
-                ),
-              ),
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('🏠 Home Hub pairing coming soon! Securely sync your identity to trusted devices.'),
+          // 💳 Merchant Terminal — only visible when user has a verified organization
+          if (_activeOrgCount > 0) ...[
+            Card(
+              child: ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                );
-              },
+                  child: const Icon(Icons.point_of_sale, color: Colors.green),
+                ),
+                title: const Text('Merchant Terminal'),
+                subtitle: const Text('Accept NFC payments'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const MerchantTerminalScreen()),
+                  );
+                },
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
+          ],
+
+          // ========== DANGER ZONE ==========
+
           Card(
             child: ListTile(
               leading: const Icon(Icons.delete_forever, color: AppTheme.error),
