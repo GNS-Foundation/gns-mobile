@@ -101,7 +101,8 @@ class _SettingsTabState extends State<SettingsTab> {
             _buildLockedFeaturesSection(isDark),
             const SizedBox(height: 16),
 
-            // ==================== TOOLS ====================
+            // ==================== TOOLS (Trailblazer only) ====================
+            if (_tierGate.hasReached(FeatureTier.trailblazer))
             _buildSection('Tools', isDark, [
               _buildNavRow('Debug Console', Icons.bug_report_outlined, isDark, () {
                 Navigator.push(context,
