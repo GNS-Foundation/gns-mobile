@@ -298,6 +298,9 @@ class AppTheme {
   static Color textMuted(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark ? darkTextMuted : lightTextMuted;
 
+  /// Divider color (alias for border)
+  static Color divider(BuildContext context) => border(context);
+
   // ==================== SHORTCUT CONSTANTS ====================
   // For use in const contexts or where BuildContext is not available.
   // Note: These always return dark theme colors. For theme-aware colors,

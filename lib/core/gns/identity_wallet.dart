@@ -28,11 +28,25 @@ class IdentityWallet {
   bool get isInitialized => _initialized;
   bool get hasIdentity => _keypair != null;
   String? get publicKey => _keypair?.publicKeyHex;
+  /// Alias used by financial services
+  String? get publicKeyHex => publicKey;
   String? get gnsId => _keypair?.gnsId;
   GnsRecord? get localRecord => _localRecord;
   BreadcrumbEngine get breadcrumbEngine => _breadcrumbEngine;
   bool get networkAvailable => _networkAvailable;
   GnsKeypair? get keypair => _keypair;
+
+  // Cached identity metrics (sync access for UI)
+  String? _cachedHandle;
+  double? _cachedTrustScore;
+  int? _cachedBreadcrumbCount;
+
+  /// Sync handle getter (cached from last async read)
+  String? get currentHandle => _cachedHandle;
+  /// Cached trust score from breadcrumb engine
+  double? get trustScore => _cachedTrustScore;
+  /// Cached breadcrumb count from breadcrumb engine
+  int? get breadcrumbCount => _cachedBreadcrumbCount;
 
   // ==================== COMMUNICATION SERVICE SUPPORT ====================
   
@@ -55,8 +69,12 @@ class IdentityWallet {
   
   /// Get current claimed handle (async for storage access)
   Future<String?> getCurrentHandle() async {
-    return await _storage.readClaimedHandle();
+    _cachedHandle = await _storage.readClaimedHandle();
+    return _cachedHandle;
   }
+
+  /// Alias for getCurrentHandle
+  Future<String?> getHandle() => getCurrentHandle();
   
   /// Sign data and return raw bytes (for WebSocket auth)
   Future<Uint8List?> signBytes(Uint8List data) async {
@@ -117,6 +135,11 @@ class IdentityWallet {
 
     final handle = await _storage.readClaimedHandle();
     final stats = await _breadcrumbEngine.getStats();
+
+    // Cache values for sync access
+    _cachedHandle = handle;
+    _cachedTrustScore = stats.trustScore;
+    _cachedBreadcrumbCount = stats.breadcrumbCount;
 
     final builder = GnsRecordBuilder(_keypair!.publicKeyHex)
       ..withTrust(stats.trustScore, stats.breadcrumbCount)

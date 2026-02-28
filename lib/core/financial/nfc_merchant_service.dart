@@ -19,7 +19,7 @@ import 'package:uuid/uuid.dart';
 
 // Forward declarations for GNS types
 import '../gns/identity_wallet.dart';
-import 'stellar_service.dart';
+import '../../ui/financial/stellar_service.dart';
 import 'payment_receipt.dart';
 import 'merchant_registry.dart';
 

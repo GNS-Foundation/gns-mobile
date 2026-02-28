@@ -18,7 +18,7 @@ import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 
 import '../gns/identity_wallet.dart';
-import 'stellar_service.dart';
+import '../../ui/financial/stellar_service.dart';
 import 'payment_receipt.dart';
 
 /// HCE Payment Mode
@@ -463,7 +463,7 @@ class HcePaymentService {
     
     try {
       // Get user's Stellar address
-      final userPk = _wallet!.publicKeyHex;
+      final userPk = _wallet!.publicKeyHex ?? '';
       final userStellarKey = _stellarService!.gnsKeyToStellar(userPk);
       
       // Get private key for signing
@@ -515,7 +515,7 @@ class HcePaymentService {
           transactionHash: result.hash,
           authCode: _generateAuthCode(),
           userPublicKey: userPk,
-          userHandle: await _wallet!.getHandle(),
+          userHandle: (await _wallet!.getHandle()),
           timestamp: DateTime.now(),
         );
         
@@ -704,7 +704,7 @@ class HcePaymentCard {
   
   /// Generate virtual card from GNS identity
   factory HcePaymentCard.fromWallet(IdentityWallet wallet) {
-    final pk = wallet.publicKeyHex;
+    final pk = wallet.publicKeyHex ?? '000000000000';
     
     // Generate card number from public key (not a real card number)
     final cardNum = '4747 ${pk.substring(0, 4)} ${pk.substring(4, 8)} ${pk.substring(8, 12)}'.toUpperCase();

@@ -18,7 +18,7 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 import '../gns/identity_wallet.dart';
-import 'stellar_service.dart';
+import '../../ui/financial/stellar_service.dart';
 import 'payment_receipt.dart';
 
 /// Refund status
@@ -283,7 +283,7 @@ class RefundService {
         Uri.parse('$_baseUrl/refunds/request'),
         headers: {
           'Content-Type': 'application/json',
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
           'X-GNS-Signature': signature,
         },
         body: jsonEncode(refundRequest.toJson()),
@@ -333,7 +333,7 @@ class RefundService {
           Uri.parse('$_baseUrl/refunds/$refundId/reject'),
           headers: {
             'Content-Type': 'application/json',
-            'X-GNS-Public-Key': _wallet!.publicKeyHex,
+            'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
           },
           body: jsonEncode({
             'rejection_reason': rejectionReason ?? 'Refund rejected by merchant',
@@ -356,7 +356,7 @@ class RefundService {
         Uri.parse('$_baseUrl/refunds/$refundId/approve'),
         headers: {
           'Content-Type': 'application/json',
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
       );
       
@@ -513,7 +513,8 @@ class RefundService {
     if (_wallet == null) throw Exception('Wallet not initialized');
     
     final message = '${request.refundId}:${request.originalTransactionHash}:${request.refundAmount}';
-    final signature = await _wallet!.sign(message);
+    final signature = await _wallet!.signString(message);
+    if (signature == null) throw Exception('Failed to sign refund request');
     return signature;
   }
   

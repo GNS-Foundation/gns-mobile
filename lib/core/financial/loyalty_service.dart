@@ -510,7 +510,7 @@ class LoyaltyService {
       final response = await http.get(
         Uri.parse('$_baseUrl/loyalty/profile'),
         headers: {
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
       );
       
@@ -563,7 +563,7 @@ class LoyaltyService {
       final response = await http.get(
         uri,
         headers: {
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
       );
       
@@ -622,7 +622,7 @@ class LoyaltyService {
         Uri.parse('$_baseUrl/loyalty/rewards/$rewardId/redeem'),
         headers: {
           'Content-Type': 'application/json',
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
       );
       
@@ -664,7 +664,7 @@ class LoyaltyService {
       final response = await http.get(
         uri,
         headers: {
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
       );
       
@@ -716,7 +716,7 @@ class LoyaltyService {
       final response = await http.post(
         Uri.parse('$_baseUrl/loyalty/programs/$programId/enroll'),
         headers: {
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
       );
       
@@ -741,7 +741,7 @@ class LoyaltyService {
       final response = await http.get(
         uri,
         headers: {
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
       );
       
@@ -796,7 +796,7 @@ class LoyaltyService {
         Uri.parse('$_baseUrl/loyalty/referral/submit'),
         headers: {
           'Content-Type': 'application/json',
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
         body: jsonEncode({'code': code}),
       );
@@ -827,7 +827,7 @@ class LoyaltyService {
       final response = await http.get(
         Uri.parse('$_baseUrl/loyalty/referral/code'),
         headers: {
-          'X-GNS-Public-Key': _wallet!.publicKeyHex,
+          'X-GNS-Public-Key': _wallet!.publicKeyHex ?? '',
         },
       );
       
