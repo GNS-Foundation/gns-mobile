@@ -49,6 +49,7 @@ dependencies:
   webview_flutter: ^4.4.2
   share_plus: ^12.0.1
   fl_chart: ^0.69.0
+  flutter_native_splash: ^2.4.6
 
 dev_dependencies:
   flutter_test:
@@ -67,3 +68,18 @@ flutter_launcher_icons:
 
   assets:
     - assets/audio/
+
+# ==================== SPLASH SCREEN ====================
+flutter_native_splash:
+  color: "#0D1117"
+  image: assets/icons/gc_splash_logo.png
+  color_dark: "#0D1117"
+  image_dark: assets/icons/gc_splash_logo.png
+  android_12:
+    color: "#0D1117"
+    image: assets/icons/gc_splash_logo.png
+    color_dark: "#0D1117"
+    image_dark: assets/icons/gc_splash_logo.png
+  ios: true
+  android: true
+  web: false
