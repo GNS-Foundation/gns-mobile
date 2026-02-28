@@ -31,11 +31,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>9lobe needs camera access to scan QR codes for sharing your identity and to capture profile photos for your facets.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>globecrumbs needs background location to automatically drop breadcrumbs</string>
+	<string>Globe Crumbs collects location in the background to build your Proof-of-Trajectory identity. Your exact location is never stored — only anonymized H3 grid cells.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>GNS Browser needs background location access to automatically collect breadcrumbs.</string>
+	<string>Globe Crumbs needs continuous location access to prove your humanity through movement patterns. Only quantized grid cells are recorded.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>globecrumbs needs your location to drop crumbs and build your identity</string>
+	<string>Globe Crumbs uses your location to drop breadcrumbs on the map and build your trajectory identity.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>9lobe needs microphone access for voice and video calls.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -45,11 +45,9 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
-		<string>nearby-interaction</string>
+		<string>fetch</string>
 		<string>remote-notification</string>
 		<string>voip</string>
-		<string>fetch</string>
-		<string>audio</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

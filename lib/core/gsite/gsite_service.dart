@@ -28,10 +28,14 @@ class ValidationResult {
   factory ValidationResult.fromJson(Map<String, dynamic> json) => ValidationResult(
     valid: json['valid'] as bool,
     errors: (json['errors'] as List<dynamic>?)
-        ?.map((e) => ValidationError.fromJson(e as Map<String, dynamic>))
+        ?.map((e) => e is String
+            ? ValidationError(path: '', message: e)
+            : ValidationError.fromJson(e as Map<String, dynamic>))
         .toList() ?? [],
     warnings: (json['warnings'] as List<dynamic>?)
-        ?.map((w) => ValidationWarning.fromJson(w as Map<String, dynamic>))
+        ?.map((w) => w is String
+            ? ValidationWarning(path: '', message: w)
+            : ValidationWarning.fromJson(w as Map<String, dynamic>))
         .toList() ?? [],
   );
 }

@@ -1,7 +1,8 @@
-/// Home Tab
+/// Home Tab — Phase 1
 /// 
-/// Main home screen with identity card, breadcrumb controls, search, 
-/// handle progress, GNS tokens, and payments card.
+/// Simplified: identity card, breadcrumb status, handle progress,
+/// and extension pairing CTA. Payments, tokens, and search removed
+/// (gated behind TierGate for later phases).
 /// 
 /// Location: lib/ui/home/home_tab.dart
 
@@ -12,38 +13,23 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../core/gns/identity_wallet.dart';
 import '../../core/chain/breadcrumb_engine.dart';
 import '../../core/profile/profile_service.dart';
-import '../../core/profile/profile_module.dart';
 import '../../core/profile/identity_view_data.dart';
-import '../../core/profile/profile_facet.dart';
-import '../../core/financial/payment_service.dart';
-import '../../core/financial/transaction_storage.dart';
+import '../../core/tier_gate.dart';
 import '../../core/theme/theme_service.dart';
-import '../financial/stellar_service.dart';
 import '../widgets/identity_card.dart';
-import '../widgets/gns_search_bar.dart';
-import '../widgets/share_facet_picker.dart';
-import '../profile/profile_editor_screen.dart';
-import '../screens/identity_viewer_screen.dart';
-import '../screens/gns_token_screen.dart';
 import '../screens/handle_management_screen.dart';
 import '../screens/browser_pairing_screen.dart';
-import '../financial/send_money_screen.dart';
-import '../financial/transactions_screen.dart';
-import '../financial/financial_hub_screen.dart';
-import '../widgets/floating_nfc_button.dart';
 
 // ==================== HOME TAB ====================
 
 class HomeTab extends StatefulWidget {
   final IdentityWallet wallet;
   final ProfileService profileService;
-  final PaymentService? paymentService;
 
   const HomeTab({
     super.key,
     required this.wallet,
     required this.profileService,
-    this.paymentService,
   });
 
   @override
@@ -52,26 +38,13 @@ class HomeTab extends StatefulWidget {
 
 class _HomeTabState extends State<HomeTab> {
   IdentityViewData? _myIdentity;
-  final _searchController = TextEditingController();
   bool _isLoading = true;
-  
-  // Payment data
-  double _todaySent = 0;
-  double _todayReceived = 0;
-  int _pendingCount = 0;
-  List<GnsTransaction> _recentTransactions = [];
-  
-  // GNS Token data
-  final _stellar = StellarService();
-  double _gnsBalance = 0;
-  double _gnsClaimable = 0;
-  bool _gnsLoaded = false;
+  final _tierGate = TierGate();
 
   @override
   void initState() {
     super.initState();
     _loadData();
-    // Refresh UI when breadcrumb is dropped (with small delay for storage sync)
     widget.wallet.breadcrumbEngine.onBreadcrumbDropped = (_) async {
       await Future.delayed(const Duration(milliseconds: 100));
       _loadData();
@@ -80,1036 +53,385 @@ class _HomeTabState extends State<HomeTab> {
 
   Future<void> _loadData() async {
     final identity = await widget.profileService.getMyIdentity();
-    
-    // Load payment data if available
-    if (widget.paymentService != null) {
-      try {
-        final sent = await widget.paymentService!.getTotalSentToday(currency: 'EUR');
-        final received = await widget.paymentService!.getTotalReceivedToday(currency: 'EUR');
-        final pending = await widget.paymentService!.getPendingIncoming();
-        final txs = await widget.paymentService!.getTransactions(limit: 3);
-        
-        if (mounted) {
-          setState(() {
-            _todaySent = sent;
-            _todayReceived = received;
-            _pendingCount = pending.length;
-            _recentTransactions = txs;
-          });
-        }
-      } catch (e) {
-        debugPrint('Payment data error: $e');
-      }
-    }
-    
-    // Load GNS token balance
-    await _loadGnsBalance();
-    
     if (mounted) {
       setState(() {
         _myIdentity = identity;
         _isLoading = false;
       });
-    }
-  }
-  
-  Future<void> _loadGnsBalance() async {
-    try {
-      final publicKey = widget.wallet.publicKey;
-      if (publicKey == null) return;
-      
-      final stellarAddress = _stellar.gnsKeyToStellar(publicKey);
-      final exists = await _stellar.accountExists(stellarAddress);
-      
-      if (exists) {
-        final balance = await _stellar.getGnsBalance(stellarAddress);
-        final claimable = await _stellar.getGnsClaimableBalances(stellarAddress);
-        final claimableTotal = claimable.fold<double>(
-          0.0, (sum, cb) => sum + (double.tryParse(cb.amount) ?? 0));
-        
-        if (mounted) {
-          setState(() {
-            _gnsBalance = balance;
-            _gnsClaimable = claimableTotal;
-            _gnsLoaded = true;
-          });
-        }
-      } else {
-        // Check for claimable even without account
-        final claimable = await _stellar.getGnsClaimableBalances(stellarAddress);
-        final claimableTotal = claimable.fold<double>(
-          0.0, (sum, cb) => sum + (double.tryParse(cb.amount) ?? 0));
-        
-        if (mounted) {
-          setState(() {
-            _gnsBalance = 0;
-            _gnsClaimable = claimableTotal;
-            _gnsLoaded = true;
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('GNS balance error: $e');
-      if (mounted) {
-        setState(() => _gnsLoaded = true);
+      if (identity != null) {
+        _tierGate.updateCount(identity.breadcrumbCount);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tierColor = Color(_tierGate.currentTier.colorValue);
+    
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'GLOBE CRUMBS',
-          style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 2),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.qr_code_scanner),
-            onPressed: _pairBrowser,
-            tooltip: 'Pair Browser',
-          ),
-          IconButton(
-            icon: const Icon(Icons.share),
-            onPressed: _shareIdentity,
-            tooltip: 'Share Identity',
-          ),
-        ],
+      backgroundColor: isDark ? const Color(0xFF0D1117) : const Color(0xFFF6F8FA),
+      body: SafeArea(
+        child: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadData,
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                children: [
+                  // ==================== HEADER ====================
+                  _buildHeader(isDark),
+                  const SizedBox(height: 20),
+                  
+                  // ==================== IDENTITY CARD ====================
+                  if (_myIdentity != null)
+                    IdentityCard(identity: _myIdentity!),
+                  const SizedBox(height: 20),
+                  
+                  // ==================== HANDLE STATUS ====================
+                  _buildHandleCard(isDark, tierColor),
+                  const SizedBox(height: 16),
+                  
+                  // ==================== BREADCRUMB STATUS ====================
+                  _buildBreadcrumbStatus(isDark, tierColor),
+                  const SizedBox(height: 16),
+                  
+                  // ==================== EXTENSION PAIRING ====================
+                  _buildExtensionPairingCard(isDark),
+                  const SizedBox(height: 16),
+                  
+                  // ==================== PUBLIC KEY ====================
+                  _buildPublicKeyCard(isDark),
+                  
+                  const SizedBox(height: 40),
+                ],
+              ),
+            ),
       ),
-      body: Stack(
+    );
+  }
+
+  // ==================== HEADER ====================
+
+  Widget _buildHeader(bool isDark) {
+    final handle = _myIdentity?.handle;
+    return Row(
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              handle != null ? '@$handle' : 'Globe Crumbs',
+              style: TextStyle(
+                fontSize: 24, fontWeight: FontWeight.w800,
+                color: isDark ? Colors.white : Colors.black87,
+              ),
+            ),
+            Text(
+              'Identity through Presence',
+              style: TextStyle(
+                fontSize: 13,
+                color: isDark ? Colors.white38 : Colors.black38,
+              ),
+            ),
+          ],
+        ),
+        const Spacer(),
+        // Tier badge
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Color(_tierGate.currentTier.colorValue).withOpacity(0.12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_tierGate.currentTier.icon, style: const TextStyle(fontSize: 14)),
+              const SizedBox(width: 4),
+              Text(
+                _tierGate.currentTier.displayName,
+                style: TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w700,
+                  color: Color(_tierGate.currentTier.colorValue),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ==================== HANDLE STATUS CARD ====================
+
+  Widget _buildHandleCard(bool isDark, Color tierColor) {
+    final info = _myIdentity;
+    if (info == null) return const SizedBox.shrink();
+    
+    final hasHandle = info.handle != null;
+    
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF161B22) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Main content
-          RefreshIndicator(
-            onRefresh: _loadData,
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      // 1. Identity Card
-                      if (_myIdentity != null) 
-                        IdentityCard(
-                          identity: _myIdentity!,
-                          onEdit: _editProfile,
-                        ),
-                      const SizedBox(height: 16),
-                      
-                      // 2. Breadcrumb Collection (core GNS action - moved up)
-                      _buildQuickActions(),
-                      const SizedBox(height: 16),
-                      
-                      // 3. Search Bar
-                      GnsSearchBar(
-                        controller: _searchController,
-                        onSearch: _search,
-                      ),
-                      const SizedBox(height: 16),
-                      
-                      // 4. Handle Card (progress/claimed)
-                      _buildHandleCard(),
-                      const SizedBox(height: 16),
-                      
-                      // 5. GNS Token Card (NEW!)
-                      _buildGnsTokenCard(),
-                      const SizedBox(height: 16),
-                      
-                      // 6. Payments Card (secondary feature - at bottom)
-                      _buildPaymentsCard(),
-                      
-                      const SizedBox(height: 24),
-                    ],
+          Row(
+            children: [
+              Icon(
+                hasHandle ? Icons.alternate_email : Icons.pending_outlined,
+                size: 18,
+                color: hasHandle ? tierColor : Colors.amber,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                hasHandle ? '@${info.handle}' : '@handle',
+                style: TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w700,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+              ),
+              const Spacer(),
+              if (hasHandle)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: tierColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(8),
                   ),
+                  child: Text(
+                    'Reserved',
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: tierColor),
+                  ),
+                ),
+            ],
           ),
           
-          // 🆕 NFC Tap-to-Pay Button
-          const FloatingNfcButton(
-            bottom: 24,
-            right: 16,
-          ),
+          if (!hasHandle) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Reserve your @handle — it will activate at Explorer tier (50 breadcrumbs)',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.white38 : Colors.black38,
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () {
+                  Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => HandleManagementScreen(wallet: widget.wallet)),
+                  );
+                },
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: tierColor),
+                  foregroundColor: tierColor,
+                ),
+                child: const Text('Reserve @Handle'),
+              ),
+            ),
+          ],
+          
+          if (hasHandle && !_tierGate.hasReached(FeatureTier.explorer)) ...[
+            const SizedBox(height: 8),
+            // Progress to activation
+            Row(
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: info.breadcrumbCount / 50,
+                      backgroundColor: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
+                      color: tierColor,
+                      minHeight: 6,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  '${info.breadcrumbCount}/50',
+                  style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white54 : Colors.black45,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Collect ${50 - info.breadcrumbCount} more breadcrumbs to activate',
+              style: TextStyle(
+                fontSize: 11,
+                color: isDark ? Colors.white30 : Colors.black26,
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  // ============ GNS TOKEN CARD ============
-  Widget _buildGnsTokenCard() {
-    final hasClaimable = _gnsClaimable > 0;
+  // ==================== BREADCRUMB STATUS ====================
+
+  Widget _buildBreadcrumbStatus(bool isDark, Color tierColor) {
+    final info = _myIdentity;
+    if (info == null) return const SizedBox.shrink();
     
     return Container(
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            const Color(0xFF4CAF50).withOpacity(0.15),
-            const Color(0xFF2196F3).withOpacity(0.1),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
+        color: isDark ? const Color(0xFF161B22) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppTheme.border(context)),
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const GnsTokenScreen()),
-            ).then((_) => _loadGnsBalance());
-          },
-          borderRadius: BorderRadius.circular(16),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4CAF50), Color(0xFF2196F3)],
-                            ),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: const Center(
-                            child: Text(
-                              'G',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Text(
-                          'GNS TOKENS',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1,
-                            color: AppTheme.textPrimary(context),
-                          ),
-                        ),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        // Claimable badge
-                        if (hasClaimable)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            margin: const EdgeInsets.only(right: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.amber,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              '${_gnsClaimable.toStringAsFixed(0)} claimable',
-                              style: const TextStyle(
-                                color: Colors.black,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        Icon(Icons.chevron_right, color: AppTheme.textMuted(context)),
-                      ],
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 16),
-                
-                // Balance Display
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      _gnsLoaded ? _gnsBalance.toStringAsFixed(2) : '...',
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.textPrimary(context),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(
-                        'GNS',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          color: AppTheme.textSecondary(context),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 12),
-                
-                Text(
-                  'Tap to view wallet',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppTheme.textMuted(context),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+      child: Column(
+        children: [
+          _buildStatRow('Breadcrumbs', '${info.breadcrumbCount}', isDark),
+          const Divider(height: 20),
+          _buildStatRow('Trust Score', '${info.trustScore.toStringAsFixed(0)}%', isDark),
+          const Divider(height: 20),
+          _buildStatRow('Identity Age', '${info.daysSinceCreation} days', isDark),
+          const Divider(height: 20),
+          _buildStatRow('Chain Valid', info.chainValid ? '✅ Yes' : '❌ No', isDark),
+        ],
       ),
     );
   }
 
-  // ============ PAYMENTS CARD ============
-  Widget _buildPaymentsCard() {
+  Widget _buildStatRow(String label, String value, bool isDark) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: TextStyle(
+          fontSize: 14, color: isDark ? Colors.white60 : Colors.black54,
+        )),
+        Text(value, style: TextStyle(
+          fontSize: 14, fontWeight: FontWeight.w700,
+          color: isDark ? Colors.white : Colors.black87,
+        )),
+      ],
+    );
+  }
+
+  // ==================== EXTENSION PAIRING ====================
+
+  Widget _buildExtensionPairingCard(bool isDark) {
     return Container(
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            AppTheme.primary.withOpacity(0.15),
-            AppTheme.secondary.withOpacity(0.1),
+            const Color(0xFF1A3C5E).withOpacity(isDark ? 0.4 : 0.08),
+            const Color(0xFF1A3C5E).withOpacity(isDark ? 0.2 : 0.03),
           ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.border(context)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1A3C5E).withOpacity(0.2)),
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const FinancialHubScreen()),
-            );
-          },
-          borderRadius: BorderRadius.circular(16),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: AppTheme.primary.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.account_balance_wallet, 
-                            color: AppTheme.primary, size: 20),
-                        ),
-                        const SizedBox(width: 12),
-                        Text(
-                          'PAYMENTS',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1,
-                            color: AppTheme.textPrimary(context),
-                          ),
-                        ),
-                      ],
-                    ),
-                    // Pending badge
-                    if (_pendingCount > 0)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppTheme.warning,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '$_pendingCount pending',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    Icon(Icons.chevron_right, color: AppTheme.textMuted(context)),
-                  ],
-                ),
-                
-                const SizedBox(height: 16),
-                
-                // Today's Activity
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildActivityStat(
-                        icon: Icons.arrow_upward,
-                        iconColor: AppTheme.error,
-                        label: 'Sent Today',
-                        value: '€${_todaySent.toStringAsFixed(2)}',
-                      ),
-                    ),
-                    Container(
-                      width: 1,
-                      height: 40,
-                      color: AppTheme.border(context),
-                    ),
-                    Expanded(
-                      child: _buildActivityStat(
-                        icon: Icons.arrow_downward,
-                        iconColor: AppTheme.secondary,
-                        label: 'Received',
-                        value: '€${_todayReceived.toStringAsFixed(2)}',
-                      ),
-                    ),
-                  ],
-                ),
-                
-                // Quick send button row
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const SendMoneyScreen()),
-                          );
-                        },
-                        icon: const Icon(Icons.send, size: 18),
-                        label: const Text('Send'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppTheme.primary,
-                          side: BorderSide(color: AppTheme.primary.withOpacity(0.5)),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const TransactionsScreen()),
-                          );
-                        },
-                        icon: const Icon(Icons.history, size: 18),
-                        label: const Text('History'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppTheme.primary,
-                          side: BorderSide(color: AppTheme.primary.withOpacity(0.5)),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActivityStat({
-    required IconData icon,
-    required Color iconColor,
-    required String label,
-    required String value,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          Icon(icon, color: iconColor, size: 16),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: AppTheme.textMuted(context),
+          Container(
+            width: 44, height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A3C5E).withOpacity(0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.extension, color: Color(0xFF1A3C5E), size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'GNS Vault Extension',
+                  style: TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : Colors.black87,
+                  ),
                 ),
-              ),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimary(context),
+                const SizedBox(height: 2),
+                Text(
+                  'Pair with Chrome to verify sites and auto-fill',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isDark ? Colors.white38 : Colors.black38,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: () {
+              Navigator.push(context,
+                MaterialPageRoute(builder: (_) => BrowserPairingScreen(wallet: widget.wallet)),
+              );
+            },
+            icon: const Icon(Icons.qr_code, color: Color(0xFF1A3C5E)),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildHandleCard() {
-    return FutureBuilder<IdentityInfo>(
-      future: widget.wallet.getIdentityInfo(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) return const SizedBox.shrink();
-        
-        final info = snapshot.data!;
-        
-        if (info.claimedHandle != null) {
-          return Card(
-            child: InkWell(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => HandleManagementScreen(wallet: widget.wallet),
-                ),
-              ),
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  children: [
-                    const Text('✓', style: TextStyle(fontSize: 24, color: AppTheme.secondary)),
-                    const SizedBox(width: 12),
-                    Text(
-                      '@${info.claimedHandle}',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.secondary,
-                      ),
-                    ),
-                    const Spacer(),
-                    const Text('CLAIMED', style: TextStyle(color: AppTheme.secondary)),
-                    const SizedBox(width: 8),
-                    Icon(Icons.chevron_right, color: AppTheme.textMuted(context)),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }
-        
-        if (info.reservedHandle != null) {
-          final remaining = 100 - info.breadcrumbCount;
-          return Card(
-            child: InkWell(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => HandleManagementScreen(wallet: widget.wallet),
-                ),
-              ).then((_) => _loadData()),
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          '@${info.reservedHandle}',
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                        ),
-                        const Spacer(),
-                        Icon(Icons.chevron_right, color: AppTheme.textMuted(context)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      remaining > 0 
-                          ? 'Reserved • ${info.breadcrumbCount}/100 breadcrumbs'
-                          : '✓ Ready to claim!',
-                      style: TextStyle(color: AppTheme.textSecondary(context)),
-                    ),
-                    const SizedBox(height: 12),
-                    // Progress bar
-                    LinearProgressIndicator(
-                      value: info.breadcrumbCount / 100,
-                      backgroundColor: Colors.grey.withOpacity(0.2),
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        info.canClaimHandle ? AppTheme.secondary : AppTheme.primary,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Tap for details',
-                      style: TextStyle(fontSize: 12, color: AppTheme.textMuted(context)),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }
-        
-        return _HandleReservationCard(
-          wallet: widget.wallet,
-          onReserved: _loadData,
-        );
-      },
-    );
-  }
+  // ==================== PUBLIC KEY ====================
 
-  Widget _buildQuickActions() {
-    final isCollecting = widget.wallet.breadcrumbEngine.isCollecting;
+  Widget _buildPublicKeyCard(bool isDark) {
+    final pk = widget.wallet.publicKey ?? '';
+    if (pk.isEmpty) return const SizedBox.shrink();
     
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: isCollecting ? AppTheme.secondary : AppTheme.textMuted(context),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  isCollecting ? 'COLLECTING' : 'PAUSED',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      if (isCollecting) {
-                        widget.wallet.stopBreadcrumbCollection();
-                      } else {
-                        await widget.wallet.startBreadcrumbCollection(
-                          interval: const Duration(seconds: 30),  // TESTING: 30 sec
-                        );
-                      }
-                      setState(() {});
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isCollecting ? AppTheme.error : AppTheme.secondary,
-                    ),
-                    child: Text(isCollecting ? 'STOP' : 'START'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton(
-                  onPressed: () async {
-                    final result = await widget.wallet.dropBreadcrumb();
-                    _loadData();
-                    
-                    if (!mounted) return;
-                    
-                    if (result.rejection != null) {
-                      _showMovementRequiredDialog(result.rejection!);
-                    } else if (result.success && result.block != null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('🍞 Breadcrumb #${result.block!.index + 1} dropped!'),
-                          backgroundColor: AppTheme.secondary,
-                        ),
-                      );
-                    }
-                  },
-                  child: const Text('DROP NOW'),
-                ),
-              ],
-            ),
-          ],
-        ),
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF161B22) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border(context)),
       ),
-    );
-  }
-
-  void _showMovementRequiredDialog(BreadcrumbDropRejection rejection) {
-    String emoji;
-    String title;
-    String message;
-    
-    switch (rejection) {
-      case BreadcrumbDropRejection.sameLocation:
-        emoji = '📍';
-        title = 'Already Here!';
-        message = "You're still in the same spot.\n\nYour identity is built through movement. Walk to a new location to drop your next breadcrumb.";
-      case BreadcrumbDropRejection.tooClose:
-        emoji = '📏';
-        title = 'Too Close!';
-        message = "You haven't moved far enough.\n\nWalk at least 50 meters from your last breadcrumb location.";
-      case BreadcrumbDropRejection.tooFast:
-        emoji = '🚀';
-        title = 'Whoa, Slow Down!';
-        message = "That speed seems unrealistic.\n\nYour movement appears faster than possible. Wait a moment and try again.";
-      case BreadcrumbDropRejection.noGps:
-        emoji = '📡';
-        title = 'No GPS Signal';
-        message = "Couldn't get your location.\n\nMake sure Location Services are enabled and you have a clear view of the sky.";
-      case BreadcrumbDropRejection.notInitialized:
-        emoji = '⚠️';
-        title = 'Not Ready';
-        message = "The breadcrumb engine is still initializing.\n\nPlease wait a moment and try again.";
-    }
-    
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(emoji, style: const TextStyle(fontSize: 64)),
-              const SizedBox(height: 16),
-              Text(title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 16),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: AppTheme.textSecondary(context), height: 1.5),
-              ),
-              if (rejection == BreadcrumbDropRejection.sameLocation) ...[
-                const SizedBox(height: 16),
-                Text('🚶 Explore your neighborhood', style: TextStyle(color: AppTheme.textMuted(context))),
-                Text('☕ Visit a café', style: TextStyle(color: AppTheme.textMuted(context))),
-                Text('🌳 Take a walk in the park', style: TextStyle(color: AppTheme.textMuted(context))),
-              ],
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('GOT IT!', style: TextStyle(fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _pairBrowser() async {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => BrowserPairingScreen(wallet: widget.wallet),
-      ),
-    );
-  }
-
-  Future<void> _shareIdentity() async {
-    final result = await ShareFacetPicker.show(
-      context,
-      publicKey: widget.wallet.publicKey ?? '',
-      handle: _myIdentity?.handle,
-    );
-    
-    if (result == null || !mounted) return;
-    
-    final payload = GnsIdentityPayload(
-      publicKey: widget.wallet.publicKey ?? '',
-      handle: _myIdentity?.handle,
-      facetId: result.facet.id,
-    );
-    
-    if (result.showQr) {
-      _showQrDialog(result.facet, payload);
-    } else if (result.copyLink) {
-      await Clipboard.setData(ClipboardData(text: payload.toUrl()));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Link copied: ${payload.toUrl()}'),
-            backgroundColor: AppTheme.secondary,
-          ),
-        );
-      }
-    }
-  }
-
-  void _showQrDialog(ProfileFacet facet, GnsIdentityPayload payload) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Text(facet.emoji, style: const TextStyle(fontSize: 32)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          facet.label,
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                        ),
-                        if (facet.displayName != null)
-                          Text(
-                            facet.displayName!,
-                            style: TextStyle(color: AppTheme.textSecondary(ctx), fontSize: 14),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: QrImageView(
-                  data: jsonEncode(payload.toJson()),
-                  version: QrVersions.auto,
-                  size: 200,
-                  backgroundColor: Colors.white,
-                  eyeStyle: const QrEyeStyle(
-                    eyeShape: QrEyeShape.square,
-                    color: Colors.black,
-                  ),
-                  dataModuleStyle: const QrDataModuleStyle(
-                    dataModuleShape: QrDataModuleShape.square,
-                    color: Colors.black,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppTheme.surfaceLight(ctx),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  payload.toUrl(),
-                  style: TextStyle(color: AppTheme.textMuted(ctx), fontSize: 12, fontFamily: 'monospace'),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Scan to view your ${facet.label.toLowerCase()} profile',
-                style: TextStyle(color: AppTheme.textSecondary(ctx), fontSize: 12),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: payload.toUrl()));
-                        ScaffoldMessenger.of(ctx).showSnackBar(
-                          const SnackBar(content: Text('Link copied!')),
-                        );
-                      },
-                      icon: const Icon(Icons.copy, size: 18),
-                      label: const Text('COPY'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('DONE'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _editProfile() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ProfileEditorScreen(
-          wallet: widget.wallet,
-          profileService: widget.profileService,
-          onSaved: _loadData,
-        ),
-      ),
-    );
-  }
-
-  Future<void> _search(String query) async {
-    if (query.isEmpty) return;
-
-    final result = await widget.profileService.search(query);
-    
-    if (result.success && result.identity != null) {
-      if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => IdentityViewerScreen(
-              identity: result.identity!,
-              profileService: widget.profileService,
-              wallet: widget.wallet,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'PUBLIC KEY',
+            style: TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w700,
+              letterSpacing: 1,
+              color: isDark ? Colors.white38 : Colors.black38,
             ),
           ),
-        );
-      }
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result.error ?? 'Not found')),
-        );
-      }
-    }
-  }
-
-  void _viewIdentity(String publicKey) async {
-    final result = await widget.profileService.lookupByPublicKey(publicKey);
-    
-    if (result.success && result.identity != null && mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => IdentityViewerScreen(
-            identity: result.identity!,
-            profileService: widget.profileService,
-            wallet: widget.wallet,
+          const SizedBox(height: 8),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: pk));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Public key copied'), duration: Duration(seconds: 1)),
+              );
+            },
+            child: Text(
+              pk,
+              style: TextStyle(
+                fontSize: 11, fontFamily: 'monospace',
+                color: isDark ? Colors.white54 : Colors.black45,
+              ),
+            ),
           ),
-        ),
-      );
-    }
-  }
-}
-
-// ==================== HANDLE RESERVATION CARD ====================
-
-class _HandleReservationCard extends StatefulWidget {
-  final IdentityWallet wallet;
-  final VoidCallback? onReserved;
-
-  const _HandleReservationCard({required this.wallet, this.onReserved});
-
-  @override
-  State<_HandleReservationCard> createState() => _HandleReservationCardState();
-}
-
-class _HandleReservationCardState extends State<_HandleReservationCard> {
-  final _controller = TextEditingController();
-  bool _isReserving = false;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'RESERVE YOUR @USERNAME',
-              style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1),
+          const SizedBox(height: 4),
+          Text(
+            'Tap to copy • Ed25519 (RFC 8032)',
+            style: TextStyle(
+              fontSize: 10,
+              color: isDark ? Colors.white.withValues(alpha: 0.2) : Colors.black.withValues(alpha: 0.2),
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Collect 100 breadcrumbs to claim it permanently',
-              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary(context)),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                const Text(
-                  '@',
-                  style: TextStyle(
-                    fontSize: 24,
-                    color: AppTheme.primary,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    decoration: const InputDecoration(
-                      hintText: 'username',
-                      isDense: true,
-                    ),
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _reserve(),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  onPressed: _isReserving ? null : _reserve,
-                  child: _isReserving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('RESERVE'),
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
-  }
-
-  Future<void> _reserve() async {
-    final handle = _controller.text.trim();
-    if (handle.isEmpty) return;
-
-    setState(() => _isReserving = true);
-
-    final result = await widget.wallet.reserveHandle(handle);
-
-    setState(() => _isReserving = false);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result.message ?? result.error ?? '')),
-      );
-      if (result.success) {
-        widget.onReserved?.call();
-      }
-    }
   }
 }

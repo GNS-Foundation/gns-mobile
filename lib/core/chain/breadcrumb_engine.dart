@@ -1,12 +1,21 @@
-/// Breadcrumb Engine - Updated with Location Deduplication
+/// Breadcrumb Engine v2 — Background-Aware Collection
 /// 
-/// Prevents dropping breadcrumbs in the same location.
-/// True Proof-of-Trajectory requires MOVEMENT!
+/// CHANGES FROM v1:
+/// - Timer.periodic → Geolocator.getPositionStream() with AppleSettings
+/// - Breadcrumbs drop on MOVEMENT, even with app backgrounded
+/// - iOS blue bar shows when collecting in background
+/// - Keeps all existing deduplication logic (same-location, speed, etc.)
+///
+/// iOS Requirements:
+/// - Info.plist: NSLocationAlwaysAndWhenInUseUsageDescription  
+/// - Info.plist: UIBackgroundModes → [location]
+/// - Xcode: Background Modes → Location updates ☑
 ///
 /// Location: lib/core/chain/breadcrumb_engine.dart
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
@@ -75,7 +84,7 @@ extension BreadcrumbDropRejectionExt on BreadcrumbDropRejection {
       case BreadcrumbDropRejection.tooFast:
         return '🚀 Moving too fast!\n\nYour speed seems unrealistic. Please try again.';
       case BreadcrumbDropRejection.noGps:
-        return '📍 Can\'t get your location.\n\nMake sure GPS is enabled and you\'re in an area with signal.';
+        return '📡 Can\'t get your location.\n\nMake sure GPS is enabled and you\'re in an area with signal.';
       case BreadcrumbDropRejection.notInitialized:
         return '⚠️ Engine not ready.\n\nPlease wait a moment and try again.';
     }
@@ -83,16 +92,11 @@ extension BreadcrumbDropRejectionExt on BreadcrumbDropRejection {
 
   String get shortMessage {
     switch (this) {
-      case BreadcrumbDropRejection.sameLocation:
-        return 'Move to drop!';
-      case BreadcrumbDropRejection.tooClose:
-        return 'Walk further!';
-      case BreadcrumbDropRejection.tooFast:
-        return 'Too fast!';
-      case BreadcrumbDropRejection.noGps:
-        return 'No GPS signal';
-      case BreadcrumbDropRejection.notInitialized:
-        return 'Not ready';
+      case BreadcrumbDropRejection.sameLocation: return 'Move to drop!';
+      case BreadcrumbDropRejection.tooClose: return 'Walk further!';
+      case BreadcrumbDropRejection.tooFast: return 'Too fast!';
+      case BreadcrumbDropRejection.noGps: return 'No GPS signal';
+      case BreadcrumbDropRejection.notInitialized: return 'Not ready';
     }
   }
 }
@@ -107,44 +111,45 @@ class BreadcrumbEngine {
   final _h3 = H3Quantizer();
 
   GnsKeypair? _keypair;
-  Timer? _collectionTimer;
   BreadcrumbEngineState _state = BreadcrumbEngineState.idle;
+
+  // === v2: Stream replaces Timer ===
+  StreamSubscription<Position>? _positionSubscription;
+  // Legacy timer kept for fallback/testing
+  Timer? _collectionTimer;
 
   AccelerometerEvent? _lastAccelerometer;
   GyroscopeEvent? _lastGyroscope;
   StreamSubscription? _accelerometerSubscription;
   StreamSubscription? _gyroscopeSubscription;
 
-  Duration collectionInterval = const Duration(seconds: 30);  // ← TESTING: 30 seconds auto-drop
   int h3Resolution = H3Quantizer.defaultResolution;
 
-  // Location deduplication settings
-  bool requireMovement = false;  // ← TESTING: No movement required
-  double minimumDistanceMeters = 0.0;  // ← TESTING: No minimum distance
-  double maximumSpeedKmh = 200.0;  // Maximum plausible speed
-  
-  // ⚠️ TESTING CONFIGURATION - CHANGE THESE FOR PRODUCTION!
-  // 
-  // FOR TESTING (collect 100 at same location):
-  int maxSameLocationBreadcrumbs = 999999;  // ← TESTING: No limit
-  Duration minTimeBetweenDrops = const Duration(seconds: 10);  // ← TESTING: 10 seconds manual cooldown
-  
-  // FOR PRODUCTION (genuine movement required):
-  // Duration collectionInterval = const Duration(minutes: 10);  // ← PRODUCTION: 10 minutes
-  // bool requireMovement = true;  // ← PRODUCTION: Movement required
-  // double minimumDistanceMeters = 50.0;  // ← PRODUCTION: 50m minimum
-  // int maxSameLocationBreadcrumbs = 10;  // ← PRODUCTION: 10 (home/office limit)
-  // Duration minTimeBetweenDrops = const Duration(minutes: 3);  // ← PRODUCTION: 3 minutes
+  // === COLLECTION MODE ===
+  // Set to true to use background position stream (PRODUCTION)
+  // Set to false to use Timer.periodic (LEGACY/TESTING)
+  bool useBackgroundStream = true;
+
+  // Production settings (used by both modes)
+  bool requireMovement = true;
+  double minimumDistanceMeters = 100.0;
+  double maximumSpeedKmh = 200.0;
+  int maxSameLocationBreadcrumbs = 10;
+  Duration minTimeBetweenDrops = const Duration(minutes: 5);
+  Duration collectionInterval = const Duration(minutes: 5); // legacy timer fallback
 
   Function(BreadcrumbBlock)? onBreadcrumbDropped;
-  Function(BreadcrumbDropResult)? onDropResult;  // NEW: Callback for any drop attempt
+  Function(BreadcrumbDropResult)? onDropResult;
   Function(String)? onError;
   Function(BreadcrumbEngineState)? onStateChanged;
 
   BreadcrumbEngineState get state => _state;
-  bool get isCollecting => _collectionTimer?.isActive ?? false;
+  bool get isCollecting => _positionSubscription != null || (_collectionTimer?.isActive ?? false);
   String? get publicKey => _keypair?.publicKeyHex;
   String? get gnsId => _keypair?.gnsId;
+
+  // Cell count tracking (in-memory, survives across drops within session)
+  final Map<String, int> _cellCounts = {};
 
   Future<void> initialize() async {
     _setState(BreadcrumbEngineState.initializing);
@@ -164,23 +169,26 @@ class BreadcrumbEngine {
         );
         debugPrint('Loaded existing dual-key identity: ${_keypair!.gnsId}');
       } else {
-        // ✅ DUAL-KEY: Generate BOTH keys
         _keypair = await GnsKeypair.generate();
-        
-        // ✅ DUAL-KEY: Store BOTH keys
         await _storage.storePrivateKey(_keypair!.privateKeyHex);
         await _storage.writeX25519PrivateKey(_keypair!.encryptionPrivateKeyHex);
         await _storage.storePublicKey(_keypair!.publicKeyHex);
         await _storage.storeGnsId(_keypair!.gnsId);
-        
         debugPrint('Created new dual-key identity: ${_keypair!.gnsId}');
         debugPrint('  Ed25519: ${_keypair!.publicKeyHex.substring(0, 16)}...');
         debugPrint('  X25519:  ${_keypair!.encryptionPublicKeyHex.substring(0, 16)}...');
       }
 
       _startIMUListeners();
+
+      // v2: Rebuild cell counts from chain for deduplication continuity
+      final recentBlocks = await _chainStorage.getRecentBlocks(limit: 200);
+      for (final block in recentBlocks) {
+        _cellCounts[block.locationCell] = (_cellCounts[block.locationCell] ?? 0) + 1;
+      }
+
       _setState(BreadcrumbEngineState.idle);
-      debugPrint('Breadcrumb engine initialized');
+      debugPrint('Breadcrumb engine v2 initialized (${_cellCounts.length} cells loaded)');
     } catch (e) {
       _setState(BreadcrumbEngineState.error);
       debugPrint('Engine init error: $e');
@@ -197,11 +205,16 @@ class BreadcrumbEngine {
     });
   }
 
+  // =================================================================
+  // COLLECTION START/STOP
+  // =================================================================
+
   Future<void> startCollection({Duration? interval}) async {
     if (_keypair == null) await initialize();
 
     if (interval != null) collectionInterval = interval;
 
+    // Check permissions
     final permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       final requested = await Geolocator.requestPermission();
@@ -211,21 +224,78 @@ class BreadcrumbEngine {
       }
     }
 
-    // Try first drop
+    // Drop one immediately
     await dropBreadcrumb();
 
-    _collectionTimer = Timer.periodic(collectionInterval, (_) {
-      dropBreadcrumb();
-    });
+    if (useBackgroundStream) {
+      // === v2: POSITION STREAM (background-aware) ===
+      
+      // Request "Always" if we only have "While In Use"
+      final current = await Geolocator.checkPermission();
+      if (current == LocationPermission.whileInUse) {
+        debugPrint('⚠️ Requesting "Always" location permission for background collection');
+        await Geolocator.requestPermission();
+      }
 
-    _setState(BreadcrumbEngineState.collecting);
-    final intervalStr = collectionInterval.inMinutes > 0 
-        ? '${collectionInterval.inMinutes} min' 
-        : '${collectionInterval.inSeconds} sec';
-    debugPrint('Collection started (every $intervalStr)');
+      await _positionSubscription?.cancel();
+
+      final locationSettings = AppleSettings(
+        accuracy: LocationAccuracy.reduced,
+        distanceFilter: minimumDistanceMeters.round().clamp(10, 500),
+        // === iOS BACKGROUND ===
+        activityType: ActivityType.fitness,
+        pauseLocationUpdatesAutomatically: true,
+        allowBackgroundLocationUpdates: true,
+        showBackgroundLocationIndicator: true,  // Blue bar
+      );
+
+      _positionSubscription = Geolocator.getPositionStream(
+        locationSettings: locationSettings,
+      ).listen(
+        _onPositionUpdate,
+        onError: (error) {
+          debugPrint('📡 Position stream error: $error');
+          onError?.call('Location stream error: $error');
+        },
+      );
+
+      _setState(BreadcrumbEngineState.collecting);
+      debugPrint('🛰️ Background collection started (distanceFilter: ${minimumDistanceMeters}m)');
+    } else {
+      // === LEGACY: Timer-based (foreground only) ===
+      _collectionTimer = Timer.periodic(collectionInterval, (_) {
+        dropBreadcrumb();
+      });
+
+      _setState(BreadcrumbEngineState.collecting);
+      final intervalStr = collectionInterval.inMinutes > 0 
+          ? '${collectionInterval.inMinutes} min' 
+          : '${collectionInterval.inSeconds} sec';
+      debugPrint('⏱️ Timer collection started (every $intervalStr)');
+    }
+  }
+
+  /// v2: Called by position stream when device moves past distanceFilter.
+  Future<void> _onPositionUpdate(Position position) async {
+    if (_keypair == null) return;
+
+    // Get previous block for time check
+    final previousBlock = await _chainStorage.getLatestBlock();
+    if (previousBlock != null) {
+      final elapsed = DateTime.now().difference(previousBlock.timestamp);
+      if (elapsed < minTimeBetweenDrops) {
+        return; // Too soon, wait
+      }
+    }
+
+    // The stream already filters by distance (distanceFilter),
+    // but we still need to run our full deduplication logic.
+    await dropBreadcrumb();
   }
 
   void stopCollection() {
+    _positionSubscription?.cancel();
+    _positionSubscription = null;
     _collectionTimer?.cancel();
     _collectionTimer = null;
     _setState(BreadcrumbEngineState.idle);
@@ -240,7 +310,12 @@ class BreadcrumbEngine {
     }
   }
 
-  /// Drop a breadcrumb - now with location deduplication!
+  // =================================================================
+  // BREADCRUMB DROPPING (unchanged deduplication logic from v1)
+  // =================================================================
+
+  /// Drop a breadcrumb — with full location deduplication.
+  /// Called by both the position stream and manual UI button.
   Future<BreadcrumbDropResult> dropBreadcrumb({bool manual = false}) async {
     if (_keypair == null) {
       final result = BreadcrumbDropResult.rejected(BreadcrumbDropRejection.notInitialized);
@@ -268,17 +343,10 @@ class BreadcrumbEngine {
       final previousBlock = await _chainStorage.getLatestBlock();
 
       // === SMART LOCATION DEDUPLICATION CHECK ===
-      // Rules:
-      // 1. If moved 50+ meters → Allow (distance-based)
-      // 2. If same location but < maxSameLocationBreadcrumbs → Check time
-      // 3. If minTimeBetweenDrops passed → Allow (time fallback)
-      // 4. Speed check applies to distance-based drops
-      
       if (requireMovement && previousBlock != null) {
         final previousCell = previousBlock.locationCell;
         final timeSinceLastDrop = DateTime.now().difference(previousBlock.timestamp);
         
-        // Calculate distance from previous drop
         final previousCenter = _h3.h3HexToLatLon(previousCell);
         final distance = Geolocator.distanceBetween(
           previousCenter.lat,
@@ -287,34 +355,28 @@ class BreadcrumbEngine {
           position.longitude,
         );
         
-        // ✅ RULE 1: Significant distance moved (50+ meters) → Allow instantly
+        // RULE 1: Significant distance moved → Allow
         if (distance >= minimumDistanceMeters) {
           debugPrint('✅ Distance-based drop: ${distance.toStringAsFixed(0)}m from last');
-          // Continue to drop (speed check below)
         }
-        
-        // ✅ RULE 2: Same/nearby location (< 50m)
+        // RULE 2: Same/nearby location
         else {
-          // Count breadcrumbs at this H3 cell
           final breadcrumbsAtCell = await _countBreadcrumbsAtCell(h3Cell);
           
-          // Check if we've hit the limit for this location
           if (breadcrumbsAtCell >= maxSameLocationBreadcrumbs) {
-            debugPrint('🚫 Location limit reached ($breadcrumbsAtCell/$maxSameLocationBreadcrumbs) - move to new location!');
+            debugPrint('🚫 Location limit reached ($breadcrumbsAtCell/$maxSameLocationBreadcrumbs)');
             _setState(isCollecting ? BreadcrumbEngineState.collecting : BreadcrumbEngineState.idle);
             final result = BreadcrumbDropResult.rejected(BreadcrumbDropRejection.sameLocation);
             onDropResult?.call(result);
             return result;
           }
           
-          // ✅ RULE 3: Under limit, check time fallback
+          // RULE 3: Under limit, check time fallback
           if (timeSinceLastDrop >= minTimeBetweenDrops) {
-            debugPrint('✅ Time-based drop: ${timeSinceLastDrop.inSeconds}s passed (${breadcrumbsAtCell + 1}/$maxSameLocationBreadcrumbs at this location)');
-            // Continue to drop
+            debugPrint('✅ Time-based drop: ${timeSinceLastDrop.inSeconds}s (${breadcrumbsAtCell + 1}/$maxSameLocationBreadcrumbs at cell)');
           } else {
-            // Not enough time passed
             final remaining = minTimeBetweenDrops - timeSinceLastDrop;
-            debugPrint('🚫 Too soon: wait ${remaining.inSeconds}s or move ${(minimumDistanceMeters - distance).toInt()}m more');
+            debugPrint('🚫 Too soon: wait ${remaining.inSeconds}s or move ${(minimumDistanceMeters - distance).toInt()}m');
             _setState(isCollecting ? BreadcrumbEngineState.collecting : BreadcrumbEngineState.idle);
             final result = BreadcrumbDropResult.rejected(BreadcrumbDropRejection.tooClose);
             onDropResult?.call(result);
@@ -322,11 +384,11 @@ class BreadcrumbEngine {
           }
         }
 
-        // Check 3: Speed plausibility (applies to all drops)
+        // Speed plausibility check
         if (timeSinceLastDrop.inSeconds > 0 && distance >= minimumDistanceMeters) {
           final speedKmh = (distance / 1000) / (timeSinceLastDrop.inSeconds / 3600);
           if (speedKmh > maximumSpeedKmh) {
-            debugPrint('🚫 Speed too fast (${speedKmh.toStringAsFixed(0)} km/h) - drop rejected');
+            debugPrint('🚫 Speed too fast (${speedKmh.toStringAsFixed(0)} km/h)');
             _setState(isCollecting ? BreadcrumbEngineState.collecting : BreadcrumbEngineState.idle);
             final result = BreadcrumbDropResult.rejected(BreadcrumbDropRejection.tooFast);
             onDropResult?.call(result);
@@ -366,7 +428,6 @@ class BreadcrumbEngine {
       final block = builder.build(signature);
       await _chainStorage.addBlock(block);
       
-      // Increment cell counter for same-location tracking
       _incrementCellCount(h3Cell);
 
       final count = await _storage.incrementBreadcrumbCount();
@@ -375,12 +436,11 @@ class BreadcrumbEngine {
 
       if (count == 1) await _storage.storeFirstBreadcrumbAt(block.timestamp);
 
-      // Track unique cells for better trust scoring
       await _updateUniqueCells(h3Cell);
       await _updateTrustScore(count);
 
       _setState(isCollecting ? BreadcrumbEngineState.collecting : BreadcrumbEngineState.idle);
-      debugPrint('🍞 Breadcrumb #$count dropped: ${block.blockHash.substring(0, 8)}...');
+      debugPrint('🍞 Breadcrumb #$count dropped: ${block.blockHash.substring(0, 8)}... cell:${h3Cell.substring(0, 12)}...');
 
       final result = BreadcrumbDropResult.success(block);
       onBreadcrumbDropped?.call(block);
@@ -395,6 +455,10 @@ class BreadcrumbEngine {
       return result;
     }
   }
+
+  // =================================================================
+  // HELPERS (unchanged from v1)
+  // =================================================================
 
   Future<Position?> _getPosition() async {
     try {
@@ -431,32 +495,19 @@ class BreadcrumbEngine {
     return 'stationary';
   }
 
-  /// Track unique H3 cells visited (for trust scoring)
   Future<void> _updateUniqueCells(String h3Cell) async {
-    // This could be stored in a separate table or secure storage
-    // For now, we'll count from the chain
-    // Future enhancement: store Set<String> of unique cells
+    // Handled by ChainStorage._trackUniqueCell already
   }
 
-  /// Count how many breadcrumbs exist at a specific H3 cell
-  /// Used to enforce same-location limit (max 10 at home/office)
-  /// 
-  /// SIMPLIFIED: For testing, we track this with a simple counter
-  /// For production, this could query the chain more efficiently
-  final Map<String, int> _cellCounts = {};
-  
   Future<int> _countBreadcrumbsAtCell(String h3Cell) async {
     try {
-      // Simple counter approach - tracks current session
-      // Returns how many breadcrumbs were dropped at this cell so far
       return _cellCounts[h3Cell] ?? 0;
     } catch (e) {
       debugPrint('Error counting breadcrumbs at cell: $e');
-      return 0; // Safe fallback
+      return 0;
     }
   }
   
-  /// Increment cell counter after successful drop
   void _incrementCellCount(String h3Cell) {
     _cellCounts[h3Cell] = (_cellCounts[h3Cell] ?? 0) + 1;
   }
@@ -464,7 +515,6 @@ class BreadcrumbEngine {
   Future<void> _updateTrustScore(int breadcrumbCount) async {
     double score = 0;
 
-    // Get unique cell count for better scoring
     final uniqueCells = await _chainStorage.getUniqueCellCount();
     
     // 40% from breadcrumb count (max at 200)
@@ -485,7 +535,7 @@ class BreadcrumbEngine {
     if (verification.isValid) score += 10;
 
     await _storage.storeTrustScore(score.clamp(0, 100));
-    debugPrint('Trust score updated: ${score.toStringAsFixed(1)}% (${uniqueCells} unique locations)');
+    debugPrint('Trust score: ${score.toStringAsFixed(1)}% ($uniqueCells unique cells)');
   }
 
   void _setState(BreadcrumbEngineState newState) {
@@ -516,7 +566,6 @@ class BreadcrumbEngine {
     );
   }
 
-  /// Get info about last drop location (for UI)
   Future<LastDropInfo?> getLastDropInfo() async {
     final block = await _chainStorage.getLatestBlock();
     if (block == null) return null;
@@ -562,10 +611,9 @@ class BreadcrumbStats {
     return DateTime.now().difference(firstBreadcrumbAt!).inDays;
   }
 
-  // ✅ DEV_MODE: Set to true for testing with fewer breadcrumbs
-  static const bool _devMode = false;  // Set to true for testing
-  static const int _devBreadcrumbsRequired = 3;  // For testing
-  static const double _devTrustRequired = 1.0;   // For testing
+  static const bool _devMode = false;
+  static const int _devBreadcrumbsRequired = 3;
+  static const double _devTrustRequired = 1.0;
   
   bool get canClaimHandle {
     if (_devMode) {

@@ -1,7 +1,6 @@
 /// Globe Crumbs App
 /// 
-/// Main app widget — simplified for Phase 1.
-/// Removed FloatingHomeButton and PaymentService references.
+/// Main app widget with initialization and routing.
 /// 
 /// Location: lib/app.dart
 
@@ -9,9 +8,9 @@ import 'package:flutter/material.dart';
 import 'core/gns/identity_wallet.dart';
 import 'core/profile/profile_service.dart';
 import 'core/theme/theme_service.dart';
-import 'core/tier_gate.dart';
 import 'navigation/main_navigation.dart';
 import 'ui/screens/welcome_screen.dart';
+import 'ui/widgets/floating_home_button.dart';
 
 class GlobeCrumbsApp extends StatefulWidget {
   const GlobeCrumbsApp({super.key});
@@ -82,15 +81,20 @@ class _GlobeCrumbsAppState extends State<GlobeCrumbsApp> {
       return WelcomeScreen(onCreateIdentity: _createIdentityWithHandle);
     }
     
-    return MainNavigationScreen(
-      wallet: _wallet,
-      profileService: _profileService,
-      onIdentityDeleted: _onIdentityDeleted,
+    // Wrap main navigation with floating home button
+    return FloatingHomeButton(
+      child: MainNavigationScreen(
+        wallet: _wallet,
+        profileService: _profileService,
+        onIdentityDeleted: _onIdentityDeleted,
+      ),
     );
   }
 
   void _onIdentityDeleted() {
-    setState(() => _hasIdentity = false);
+    setState(() {
+      _hasIdentity = false;
+    });
   }
 
   Future<void> _createIdentityWithHandle(String handle) async {
@@ -98,15 +102,11 @@ class _GlobeCrumbsAppState extends State<GlobeCrumbsApp> {
     
     if (result.success) {
       await _wallet.initialize();
-      
-      // Initialize TierGate at 0 breadcrumbs for new identity
-      TierGate().initializeFromStats(0);
-      
       if (mounted) {
         setState(() => _hasIdentity = true);
       }
       debugPrint('✅ Identity created: ${result.gnsId}');
-      debugPrint('✅ Handle reserved: @${result.handle}');
+      debugPrint('✅ Handle reserved: @${result.handle} (network: ${result.networkReserved})');
     } else {
       throw Exception(result.error ?? 'Failed to create identity');
     }
