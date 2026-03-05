@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'core/gns/identity_wallet.dart';
 import 'core/profile/profile_service.dart';
 import 'core/theme/theme_service.dart';
-import 'core/tier_gate.dart';
+import 'core/tier/tier_gate.dart';
 import 'navigation/main_navigation.dart';
 import 'ui/screens/welcome_screen.dart';
 
@@ -51,6 +51,7 @@ class _GlobeCrumbsAppState extends State<GlobeCrumbsApp> {
       _hasIdentity = await _wallet.checkIdentityExists();
       if (_hasIdentity) {
         await _wallet.initialize();
+        await TierGate().initialize();       // boot tier system
         await _profileService.initialize();
       }
       setState(() => _initialized = true);
@@ -99,8 +100,8 @@ class _GlobeCrumbsAppState extends State<GlobeCrumbsApp> {
     if (result.success) {
       await _wallet.initialize();
       
-      // Initialize TierGate at 0 breadcrumbs for new identity
-      TierGate().initializeFromStats(0);
+      // Initialize TierGate for the new identity
+      await TierGate().initialize();
       
       if (mounted) {
         setState(() => _hasIdentity = true);

@@ -10,7 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
 import 'core/gns/identity_wallet.dart';
-import 'core/tier_gate.dart';
+import 'core/tier/tier_gate.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
