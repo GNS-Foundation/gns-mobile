@@ -1,19 +1,18 @@
-/// Journey Tab — Gamified Progression
+/// Journey Tab — Breadcrumb Progress & Tier Progression
 ///
-/// Shows tier progress ring, drop breadcrumb button, milestone timeline,
-/// stats, and preview of features that unlock next.
+/// Shows the user's current tier, breadcrumb stats, milestones,
+/// and a preview of features that unlock at each tier.
 ///
-/// This is the gamification layer that makes breadcrumb collection
-/// feel like a game rather than a chore.
+/// This replaces the old "Trailblazer" tab and is always visible
+/// regardless of tier — it IS the unlock screen.
 ///
 /// Location: lib/ui/journey/journey_tab.dart
 
-import 'dart:math' as math;
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../../core/gns/identity_wallet.dart';
 import '../../core/chain/breadcrumb_engine.dart';
-import '../../core/tier_gate.dart';
+import '../../core/tier/tier_gate.dart';
 import '../../core/theme/theme_service.dart';
 
 class JourneyTab extends StatefulWidget {
@@ -25,32 +24,24 @@ class JourneyTab extends StatefulWidget {
   State<JourneyTab> createState() => _JourneyTabState();
 }
 
-class _JourneyTabState extends State<JourneyTab> with TickerProviderStateMixin {
+class _JourneyTabState extends State<JourneyTab> {
+  final _engine = BreadcrumbEngine();
   final _tierGate = TierGate();
+
   BreadcrumbStats? _stats;
-  bool _isCollecting = false;
-  bool _isDropping = false;
-  late AnimationController _pulseController;
+  bool _autoCollecting = false;
 
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
     _tierGate.addListener(_onTierChanged);
+    _engine.onBreadcrumbDropped = (_) => _loadStats();
     _loadStats();
-    
-    widget.wallet.breadcrumbEngine.onBreadcrumbDropped = (_) async {
-      await Future.delayed(const Duration(milliseconds: 100));
-      _loadStats();
-    };
+    _autoCollecting = _engine.isCollecting;
   }
 
   @override
   void dispose() {
-    _pulseController.dispose();
     _tierGate.removeListener(_onTierChanged);
     super.dispose();
   }
@@ -60,82 +51,63 @@ class _JourneyTabState extends State<JourneyTab> with TickerProviderStateMixin {
   }
 
   Future<void> _loadStats() async {
-    final stats = await widget.wallet.breadcrumbEngine.getStats();
-    _isCollecting = widget.wallet.breadcrumbEngine.isCollecting;
-    if (mounted) {
-      setState(() => _stats = stats);
-      _tierGate.updateCount(stats.breadcrumbCount);
-    }
-  }
-
-  Future<void> _toggleCollection() async {
-    HapticFeedback.mediumImpact();
-    if (_isCollecting) {
-      widget.wallet.breadcrumbEngine.stopCollection();
-    } else {
-      await widget.wallet.breadcrumbEngine.startCollection();
-    }
-    setState(() => _isCollecting = widget.wallet.breadcrumbEngine.isCollecting);
+    final stats = await _engine.getStats();
+    if (mounted) setState(() => _stats = stats);
   }
 
   Future<void> _dropBreadcrumb() async {
-    if (_isDropping) return;
-    setState(() => _isDropping = true);
-    HapticFeedback.heavyImpact();
-    
-    try {
-      await widget.wallet.breadcrumbEngine.dropBreadcrumb(manual: true);
-      await _loadStats();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not drop breadcrumb: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isDropping = false);
+    final result = await _engine.dropBreadcrumb();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message ?? (result.success ? '📍 Breadcrumb dropped!' : 'Drop failed')),
+          backgroundColor: result.success ? AppTheme.secondary : AppTheme.error,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
+    await _loadStats();
+  }
+
+  void _toggleAutoCollection(bool value) {
+    if (value) {
+      _engine.startCollection();
+    } else {
+      _engine.stopCollection();
+    }
+    setState(() => _autoCollecting = value);
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final tier = _tierGate.currentTier;
-    final tierColor = Color(tier.colorValue);
-    
+    final count = _stats?.breadcrumbCount ?? _tierGate.breadcrumbCount;
+    final tierColor = tier.color;
+
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0D1117) : const Color(0xFFF6F8FA),
+      backgroundColor: AppTheme.background(context),
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: _loadStats,
+          color: tierColor,
           child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            padding: const EdgeInsets.all(16),
             children: [
-              // ==================== TIER BADGE ====================
-              _buildTierBadge(tier, tierColor, isDark),
-              const SizedBox(height: 24),
-              
-              // ==================== PROGRESS RING ====================
-              _buildProgressRing(tierColor, isDark),
-              const SizedBox(height: 24),
-              
-              // ==================== DROP BUTTON ====================
-              _buildDropButton(tierColor, isDark),
-              const SizedBox(height: 24),
-              
-              // ==================== STATS GRID ====================
-              _buildStatsGrid(isDark),
-              const SizedBox(height: 24),
-              
-              // ==================== MILESTONE TIMELINE ====================
-              _buildMilestoneTimeline(tierColor, isDark),
-              const SizedBox(height: 24),
-              
-              // ==================== NEXT UNLOCK ====================
-              if (_tierGate.nextTier != null)
-                _buildNextUnlock(isDark),
-              
-              const SizedBox(height: 40),
+              _buildTierBanner(tier, tierColor),
+              const SizedBox(height: 20),
+              _buildBreadcrumbCircle(count, tierColor),
+              const SizedBox(height: 20),
+              _buildDropButton(tierColor),
+              const SizedBox(height: 12),
+              _buildAutoCollectionToggle(tierColor),
+              const SizedBox(height: 16),
+              _buildStatsRow(),
+              const SizedBox(height: 20),
+              _buildMilestones(count),
+              const SizedBox(height: 20),
+              _buildLockedFeatures(tier, count),
+              const SizedBox(height: 20),
             ],
           ),
         ),
@@ -143,21 +115,19 @@ class _JourneyTabState extends State<JourneyTab> with TickerProviderStateMixin {
     );
   }
 
-  // ==================== TIER BADGE ====================
+  // ─── Tier Banner ───────────────────────────────────────────────────────────
 
-  Widget _buildTierBadge(FeatureTier tier, Color tierColor, bool isDark) {
+  Widget _buildTierBanner(GnsTier tier, Color tierColor) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [tierColor.withOpacity(0.15), tierColor.withOpacity(0.05)],
-        ),
+        color: tierColor.withOpacity(0.1),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: tierColor.withOpacity(0.3)),
       ),
       child: Row(
         children: [
-          Text(tier.icon, style: const TextStyle(fontSize: 28)),
+          Text(tier.emoji, style: const TextStyle(fontSize: 28)),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -166,16 +136,18 @@ class _JourneyTabState extends State<JourneyTab> with TickerProviderStateMixin {
                 Text(
                   tier.displayName.toUpperCase(),
                   style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w800,
-                    letterSpacing: 1.5, color: tierColor,
+                    color: tierColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    letterSpacing: 1.2,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   tier.description,
                   style: TextStyle(
-                    fontSize: 12,
-                    color: isDark ? Colors.white60 : Colors.black54,
+                    color: AppTheme.textSecondary(context),
+                    fontSize: 13,
                   ),
                 ),
               ],
@@ -186,78 +158,34 @@ class _JourneyTabState extends State<JourneyTab> with TickerProviderStateMixin {
     );
   }
 
-  // ==================== PROGRESS RING ====================
+  // ─── Big breadcrumb circle ─────────────────────────────────────────────────
 
-  Widget _buildProgressRing(Color tierColor, bool isDark) {
-    final progress = _tierGate.progressToNextTier;
-    final count = _stats?.breadcrumbCount ?? 0;
-    final next = _tierGate.nextTier;
-    
+  Widget _buildBreadcrumbCircle(int count, Color tierColor) {
     return Center(
-      child: SizedBox(
-        width: 200,
-        height: 200,
-        child: Stack(
-          alignment: Alignment.center,
+      child: Container(
+        width: 180,
+        height: 180,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: tierColor, width: 6),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Background ring
-            SizedBox(
-              width: 200, height: 200,
-              child: CircularProgressIndicator(
-                value: 1.0,
-                strokeWidth: 10,
-                color: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
-              ),
-            ),
-            // Progress ring
-            SizedBox(
-              width: 200, height: 200,
-              child: CircularProgressIndicator(
-                value: progress,
-                strokeWidth: 10,
+            Text(
+              _formatCount(count),
+              style: TextStyle(
+                fontSize: 48,
+                fontWeight: FontWeight.bold,
                 color: tierColor,
-                backgroundColor: Colors.transparent,
-                strokeCap: StrokeCap.round,
               ),
             ),
-            // Center content
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '$count',
-                  style: TextStyle(
-                    fontSize: 48, fontWeight: FontWeight.w900,
-                    color: tierColor,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'breadcrumbs',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: isDark ? Colors.white54 : Colors.black45,
-                  ),
-                ),
-                if (next != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: tierColor.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '${_tierGate.breadcrumbsUntil(next)} to ${next.displayName}',
-                      style: TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.w600,
-                        color: tierColor,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
+            Text(
+              'breadcrumbs',
+              style: TextStyle(
+                fontSize: 14,
+                color: AppTheme.textSecondary(context),
+              ),
             ),
           ],
         ),
@@ -265,151 +193,123 @@ class _JourneyTabState extends State<JourneyTab> with TickerProviderStateMixin {
     );
   }
 
-  // ==================== DROP BUTTON ====================
+  String _formatCount(int n) => n >= 1000 ? '${(n / 1000).toStringAsFixed(1)}k' : '$n';
 
-  Widget _buildDropButton(Color tierColor, bool isDark) {
-    return Column(
-      children: [
-        // Main drop button
-        AnimatedBuilder(
-          animation: _pulseController,
-          builder: (context, child) {
-            final scale = _isCollecting
-                ? 1.0 + (_pulseController.value * 0.05)
-                : 1.0;
-            return Transform.scale(
-              scale: scale,
-              child: child,
-            );
-          },
-          child: SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: ElevatedButton.icon(
-              onPressed: _isDropping ? null : _dropBreadcrumb,
-              icon: _isDropping
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.pin_drop, size: 22),
-              label: Text(
-                _isDropping ? 'Dropping...' : 'Drop Breadcrumb',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: tierColor,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                elevation: 3,
-              ),
+  // ─── Drop Button ───────────────────────────────────────────────────────────
+
+  Widget _buildDropButton(Color tierColor) {
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: ElevatedButton.icon(
+        onPressed: _dropBreadcrumb,
+        icon: const Icon(Icons.location_on, color: Colors.white),
+        label: const Text(
+          'Drop Breadcrumb',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: tierColor,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          elevation: 0,
+        ),
+      ),
+    );
+  }
+
+  // ─── Auto-Collection Toggle ────────────────────────────────────────────────
+
+  Widget _buildAutoCollectionToggle(Color tierColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppTheme.surface(context),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border(context)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.my_location, color: tierColor, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Auto-Collection',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary(context),
+                  ),
+                ),
+                Text(
+                  _autoCollecting ? 'Collecting in background' : 'Tap to enable',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textSecondary(context),
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-        const SizedBox(height: 12),
-        
-        // Auto-collection toggle
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF161B22) : Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppTheme.border(context)),
+          Switch(
+            value: _autoCollecting,
+            onChanged: _toggleAutoCollection,
+            activeColor: tierColor,
           ),
-          child: Row(
-            children: [
-              Icon(
-                _isCollecting ? Icons.gps_fixed : Icons.gps_not_fixed,
-                size: 18,
-                color: _isCollecting ? tierColor : Colors.grey,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Auto-Collection',
-                      style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600,
-                        color: isDark ? Colors.white : Colors.black87,
-                      ),
-                    ),
-                    Text(
-                      _isCollecting ? 'Collecting in background' : 'Tap to start',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: isDark ? Colors.white38 : Colors.black38,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Switch.adaptive(
-                value: _isCollecting,
-                onChanged: (_) => _toggleCollection(),
-                activeColor: tierColor,
-              ),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
-  // ==================== STATS GRID ====================
+  // ─── Stats Row ─────────────────────────────────────────────────────────────
 
-  Widget _buildStatsGrid(bool isDark) {
-    final stats = _stats;
+  Widget _buildStatsRow() {
+    final trust = _stats?.trustScore.toStringAsFixed(0) ?? '—';
+    final cells = _stats?.uniqueLocations.toString() ?? '—';
+    final days  = _stats?.daysSinceStart.toString() ?? '—';
+
     return Row(
       children: [
-        _buildStatCard(
-          'Trust Score',
-          '${stats?.trustScore.toStringAsFixed(0) ?? '0'}%',
-          Icons.shield_outlined,
-          isDark,
-        ),
-        const SizedBox(width: 12),
-        _buildStatCard(
-          'Unique Cells',
-          '${stats?.uniqueLocations ?? 0}',
-          Icons.grid_on,
-          isDark,
-        ),
-        const SizedBox(width: 12),
-        _buildStatCard(
-          'Days Active',
-          '${stats?.daysSinceStart ?? 0}',
-          Icons.calendar_today_outlined,
-          isDark,
-        ),
+        _buildStatCard(Icons.shield_outlined, '$trust%', 'Trust Score'),
+        const SizedBox(width: 10),
+        _buildStatCard(Icons.grid_view_outlined, cells, 'Unique Cells'),
+        const SizedBox(width: 10),
+        _buildStatCard(Icons.calendar_today_outlined, days, 'Days Active'),
       ],
     );
   }
 
-  Widget _buildStatCard(String label, String value, IconData icon, bool isDark) {
+  Widget _buildStatCard(IconData icon, String value, String label) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
         decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF161B22) : Colors.white,
-          borderRadius: BorderRadius.circular(12),
+          color: AppTheme.surface(context),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: AppTheme.border(context)),
         ),
         child: Column(
           children: [
-            Icon(icon, size: 18, color: isDark ? Colors.white38 : Colors.black38),
+            Icon(icon, size: 18, color: AppTheme.textSecondary(context)),
             const SizedBox(height: 6),
             Text(
               value,
               style: TextStyle(
-                fontSize: 18, fontWeight: FontWeight.w800,
-                color: isDark ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+                color: AppTheme.textPrimary(context),
               ),
             ),
-            const SizedBox(height: 2),
             Text(
               label,
               style: TextStyle(
-                fontSize: 10,
-                color: isDark ? Colors.white38 : Colors.black38,
+                fontSize: 11,
+                color: AppTheme.textSecondary(context),
               ),
               textAlign: TextAlign.center,
             ),
@@ -419,182 +319,205 @@ class _JourneyTabState extends State<JourneyTab> with TickerProviderStateMixin {
     );
   }
 
-  // ==================== MILESTONE TIMELINE ====================
+  // ─── Milestones ────────────────────────────────────────────────────────────
 
-  Widget _buildMilestoneTimeline(Color tierColor, bool isDark) {
-    final milestones = TierGate.milestones;
-    final achieved = _tierGate.achievedMilestones;
-    
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF161B22) : Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border(context)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                'MILESTONES',
-                style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700,
-                  letterSpacing: 1,
-                  color: isDark ? Colors.white54 : Colors.black45,
-                ),
+  static const _milestones = [
+    (count: 1,   emoji: '👟', title: 'First Step',     subtitle: 'You dropped your first breadcrumb!'),
+    (count: 10,  emoji: '🌿', title: 'Getting Started', subtitle: '10 breadcrumbs — Explorer unlocked.'),
+    (count: 25,  emoji: '🚶', title: 'On Your Way',     subtitle: 'Halfway to Navigator tier.'),
+    (count: 50,  emoji: '🧭', title: 'Pathfinder',      subtitle: 'Serious momentum.'),
+    (count: 100, emoji: '💯', title: 'Century',         subtitle: '100 breadcrumbs — claim your @handle!'),
+    (count: 100, emoji: '🔑', title: 'Navigator',       subtitle: 'Messaging unlocked. Connect with others.'),
+    (count: 175, emoji: '⭐', title: 'Halfway There',   subtitle: 'Halfway to Trailblazer.'),
+    (count: 200, emoji: '🔥', title: 'Almost There',    subtitle: 'The finish line is in sight.'),
+    (count: 250, emoji: '🏔️', title: 'Trailblazer',    subtitle: 'Full access. You are a verified human.'),
+  ];
+
+  Widget _buildMilestones(int count) {
+    final completed = _milestones.where((m) => count >= m.count).length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'MILESTONES',
+              style: TextStyle(
+                color: AppTheme.textSecondary(context),
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
               ),
-              const Spacer(),
-              Text(
-                '${achieved.length}/${milestones.length}',
-                style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600,
-                  color: tierColor,
-                ),
+            ),
+            Text(
+              '$completed/${_milestones.length}',
+              style: TextStyle(
+                color: _tierGate.currentTier.color,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
               ),
-            ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surface(context),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppTheme.border(context)),
           ),
-          const SizedBox(height: 12),
-          
-          ...milestones.map((m) {
-            final isAchieved = _tierGate.breadcrumbCount >= m.threshold;
-            final isNext = !isAchieved && (milestones.indexOf(m) == 0 ||
-                _tierGate.breadcrumbCount >= milestones[milestones.indexOf(m) - 1].threshold);
-            
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
+          child: Column(
+            children: _milestones.map((m) {
+              final done = count >= m.count;
+              final isLast = _milestones.last == m;
+              return Column(
                 children: [
-                  // Icon
-                  Container(
-                    width: 32, height: 32,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isAchieved
-                          ? tierColor.withOpacity(0.15)
-                          : (isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.04)),
-                      border: isNext
-                          ? Border.all(color: tierColor, width: 2)
-                          : null,
-                    ),
-                    child: Center(
-                      child: Text(
-                        isAchieved ? m.icon : '🔒',
-                        style: TextStyle(fontSize: isAchieved ? 14 : 12),
+                  ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: done
+                            ? _tierGate.currentTier.color.withOpacity(0.15)
+                            : AppTheme.background(context),
+                      ),
+                      child: Center(
+                        child: Text(m.emoji, style: const TextStyle(fontSize: 20)),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  
-                  // Content
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          m.title,
-                          style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w600,
-                            color: isAchieved
-                                ? (isDark ? Colors.white : Colors.black87)
-                                : (isDark ? Colors.white30 : Colors.black26),
-                          ),
-                        ),
-                        Text(
-                          isAchieved ? m.description : '${m.threshold} breadcrumbs',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: isDark ? Colors.white30 : Colors.black26,
-                          ),
-                        ),
-                      ],
+                    title: Text(
+                      m.title,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: done
+                            ? AppTheme.textPrimary(context)
+                            : AppTheme.textSecondary(context),
+                        fontSize: 14,
+                      ),
                     ),
+                    subtitle: Text(
+                      m.subtitle,
+                      style: TextStyle(
+                        color: AppTheme.textMuted(context),
+                        fontSize: 12,
+                      ),
+                    ),
+                    trailing: done
+                        ? Icon(Icons.check_circle,
+                            color: _tierGate.currentTier.color, size: 22)
+                        : Icon(Icons.radio_button_unchecked,
+                            color: AppTheme.textMuted(context), size: 22),
                   ),
-                  
-                  // Checkmark
-                  if (isAchieved)
-                    Icon(Icons.check_circle, size: 18, color: tierColor),
+                  if (!isLast)
+                    Divider(height: 1, color: AppTheme.border(context)),
                 ],
-              ),
-            );
-          }),
-        ],
-      ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
     );
   }
 
-  // ==================== NEXT UNLOCK PREVIEW ====================
+  // ─── Locked Features Preview ───────────────────────────────────────────────
 
-  Widget _buildNextUnlock(bool isDark) {
-    final next = _tierGate.nextTier!;
-    final features = _tierGate.nextTierFeatures;
-    final remaining = _tierGate.breadcrumbsUntil(next);
-    final nextColor = Color(next.colorValue);
+  Widget _buildLockedFeatures(GnsTier tier, int count) {
+    // Only show locked features if not yet Trailblazer
+    if (tier.id == GnsTier.trailblazer.id) return const SizedBox.shrink();
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF161B22) : Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: nextColor.withOpacity(0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final next = tier.next!;
+    final needed = next.minBreadcrumbs - count;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'COMING NEXT',
+          style: TextStyle(
+            color: AppTheme.textSecondary(context),
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppTheme.surface(context),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppTheme.border(context)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(next.icon, style: const TextStyle(fontSize: 20)),
-              const SizedBox(width: 8),
-              Text(
-                'NEXT: ${next.displayName.toUpperCase()}',
-                style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w700,
-                  letterSpacing: 1, color: nextColor,
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: nextColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  '$remaining to go',
-                  style: TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600,
-                    color: nextColor,
+              Row(
+                children: [
+                  Text(next.emoji, style: const TextStyle(fontSize: 24)),
+                  const SizedBox(width: 10),
+                  Text(
+                    '${next.displayName} — ${next.minBreadcrumbs} breadcrumbs',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimary(context),
+                    ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '$needed more breadcrumbs to unlock',
+                style: TextStyle(
+                  color: next.color,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
                 ),
               ),
+              const SizedBox(height: 12),
+              ..._featureListForTier(next).map((f) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_outline,
+                        size: 14, color: AppTheme.textMuted(context)),
+                    const SizedBox(width: 8),
+                    Text(
+                      f,
+                      style: TextStyle(
+                        color: AppTheme.textSecondary(context),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              )),
             ],
           ),
-          const SizedBox(height: 14),
-
-          ...features.take(4).map((f) => Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                Icon(Icons.lock_open, size: 14, color: nextColor.withOpacity(0.6)),
-                const SizedBox(width: 8),
-                Text(
-                  f.displayName,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                ),
-                const Spacer(),
-                Text(
-                  f.teaser.length > 30 ? '${f.teaser.substring(0, 27)}...' : f.teaser,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isDark ? Colors.white30 : Colors.black26,
-                  ),
-                ),
-              ],
-            ),
-          )),
-        ],
-      ),
+        ),
+      ],
     );
+  }
+
+  List<String> _featureListForTier(GnsTier tier) {
+    switch (tier.id) {
+      case 'explorer':
+        return ['Claim your @handle', 'GNS identity visible to others'];
+      case 'navigator':
+        return ['Encrypted messaging', 'Contacts tab', 'Search users by @handle'];
+      case 'trailblazer':
+        return [
+          'Send & receive payments (USDC/XLM/GNS)',
+          'DIX — public posting',
+          'Profile facets',
+          'Create your gSite',
+          'Organization registration',
+          'Transaction history',
+        ];
+      default:
+        return [];
+    }
   }
 }

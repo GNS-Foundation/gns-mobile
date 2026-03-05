@@ -1,6 +1,6 @@
 /// GNS Send Money Screen
 /// 
-/// 3-step payment flow: Enter → Confirm → Result
+/// 3-step payment flow: Enter â†’ Confirm â†’ Result
 /// Location: lib/ui/financial/send_money_screen.dart
 
 import 'package:flutter/material.dart';
@@ -9,8 +9,11 @@ import '../../core/theme/theme_service.dart';
 import '../../core/financial/payment_service.dart';
 import '../../core/financial/payment_payload.dart';
 import '../../core/financial/idup_router.dart';
-import 'stellar_service.dart';  // ✅ Same folder (lib/ui/financial/)
+import 'stellar_service.dart';  // âœ… Same folder (lib/ui/financial/)
 import '../../core/discovery/discovery_service.dart';
+import '../../core/gns/gns_api_client.dart';
+import '../../core/gns/gns_record.dart';
+import '../../core/financial/financial_module.dart';
 import '../../core/gns/identity_wallet.dart';
 
 class SendMoneyScreen extends StatefulWidget {
@@ -37,30 +40,31 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
   final _memoController = TextEditingController();
   
   // State
-  String _selectedCurrency = 'GNS';  // ✅ Default to GNS!
+  String _selectedCurrency = 'GNS';  // âœ… Default to GNS!
   bool _isSearchingRecipient = false;
   bool _isSending = false;
   String? _recipientPk;
   String? _recipientHandle;
   String? _recipientError;
   RouteResult? _selectedRoute;
+  FinancialData? _recipientFinancial;  // Fetched from GNS network on recipient resolve
   PaymentSendResult? _sendResult;
   
   // Services
   PaymentService? _paymentService;
-  IdentityWallet? _wallet;  // ✅ Keep wallet reference for Stellar signing
+  IdentityWallet? _wallet;  // âœ… Keep wallet reference for Stellar signing
   final _discoveryService = DiscoveryService();
-  final _stellarService = StellarService();  // ✅ Stellar service
+  final _stellarService = StellarService();  // âœ… Stellar service
   
-  // ✅ GNS FIRST!
+  // âœ… GNS FIRST!
   static const _currencies = ['GNS', 'EUR', 'USD', 'GBP', 'BTC', 'ETH'];
   static const _currencySymbols = {
-    'GNS': '✦',   // ✅ GNS Token!
-    'EUR': '€',
+    'GNS': 'âœ¦',   // âœ… GNS Token!
+    'EUR': 'â‚¬',
     'USD': '\$',
-    'GBP': '£',
-    'BTC': '₿',
-    'ETH': 'Ξ',
+    'GBP': 'Â£',
+    'BTC': 'â‚¿',
+    'ETH': 'Îž',
   };
 
   @override
@@ -79,7 +83,7 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
 
   Future<void> _initPaymentService() async {
     try {
-      _wallet = IdentityWallet();  // ✅ Store wallet reference
+      _wallet = IdentityWallet();  // âœ… Store wallet reference
       await _wallet!.initialize();
       _paymentService = PaymentService.instance(_wallet!);
       await _paymentService!.initialize();
@@ -254,7 +258,7 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                   ),
-                  onChanged: (_) => setState(() {}),  // ✅ Trigger rebuild to update button state
+                  onChanged: (_) => setState(() {}),  // âœ… Trigger rebuild to update button state
                 ),
               ),
             ],
@@ -336,23 +340,50 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
 
   Future<void> _searchRecipient(String query) async {
     setState(() => _isSearchingRecipient = true);
-    
+
     try {
       final result = await _discoveryService.search(query);
-      
+
       if (mounted) {
-        setState(() {
-          _isSearchingRecipient = false;
-          if (result.success && result.identity != null) {
-            _recipientPk = result.identity!.publicKey;
-            _recipientHandle = result.identity!.handle;
-            _recipientError = null;
-          } else {
-            _recipientPk = null;
-            _recipientHandle = null;
-            _recipientError = result.error ?? 'Recipient not found';
+        if (result.success && result.identity != null) {
+          final pk = result.identity!.publicKey;
+
+          // ── PAYMENT DIRECTORY: fetch recipient's GNS record ──────────────
+          // This gives us their IBAN / Lightning address / crypto address so
+          // IdupRouter can auto-select the best rail for this currency.
+          FinancialData? recipientFinancial;
+          try {
+            final response = await GnsApiClient().getRecord(pk);
+            if (response['success'] == true) {
+              final recordJson = response['data']?['record_json'] as Map<String, dynamic>?;
+              if (recordJson != null) {
+                // Inject required fields so GnsRecord.fromJson works
+                recordJson['signature'] ??= '';
+                final gnsRecord = GnsRecord.fromJson(recordJson);
+                recipientFinancial = FinancialModule.fromRecord(gnsRecord);
+                debugPrint('💳 Recipient financial data: ${recipientFinancial?.paymentEndpoints.length ?? 0} endpoints');
+              }
+            }
+          } catch (e) {
+            debugPrint('Could not fetch recipient financial data: $e');
           }
-        });
+
+          setState(() {
+            _isSearchingRecipient = false;
+            _recipientPk          = pk;
+            _recipientHandle      = result.identity!.handle;
+            _recipientFinancial   = recipientFinancial;
+            _recipientError       = null;
+          });
+        } else {
+          setState(() {
+            _isSearchingRecipient = false;
+            _recipientPk          = null;
+            _recipientHandle      = null;
+            _recipientFinancial   = null;
+            _recipientError       = result.error ?? 'Recipient not found';
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -372,12 +403,30 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
 
   Future<void> _calculateRoute() async {
     if (_paymentService == null || _recipientPk == null) return;
-    
-    _selectedRoute = _paymentService!.calculateRoute(
-      recipientPk: _recipientPk!,
-      amount: _amountController.text,
-      currency: _selectedCurrency,
-    );
+
+    // GNS tokens always go via Stellar — no IDUP routing needed
+    if (_selectedCurrency == 'GNS') {
+      _selectedRoute = null;
+      return;
+    }
+
+    // For all other currencies, use IDUP router with recipient's real endpoints
+    if (_recipientFinancial != null && _recipientFinancial!.isNotEmpty) {
+      _selectedRoute = _paymentService!.calculateRoute(
+        recipientPk: _recipientPk!,
+        amount: _amountController.text,
+        currency: _selectedCurrency,
+        recipientFinancial: _recipientFinancial,
+      );
+      if (_selectedRoute != null) {
+        debugPrint('💳 Route selected: ${_selectedRoute!.route.type} → ${_selectedRoute!.endpoint.displayName}');
+        debugPrint('   Reason: ${_selectedRoute!.selectionReason}');
+      }
+    } else {
+      // Recipient has no payment endpoints configured — fallback to GNS relay
+      _selectedRoute = null;
+      debugPrint('💳 Recipient has no payment endpoints — will use GNS relay');
+    }
   }
 
   // ==================== STEP 2: CONFIRM ====================
@@ -589,8 +638,8 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
     setState(() => _isSending = true);
     
     try {
-      // GNS, USD, EUR go through Stellar network
-      if (_selectedCurrency == 'GNS' || _selectedCurrency == 'USD' || _selectedCurrency == 'EUR') {
+      // âœ… GNS tokens go through Stellar network
+      if (_selectedCurrency == 'GNS') {
         if (_wallet == null) {
           setState(() {
             _isSending = false;
@@ -603,8 +652,13 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
           return;
         }
         
+        // Get sender's Stellar address from GNS key
         final senderStellarKey = _stellarService.gnsKeyToStellar(_wallet!.publicKey!);
+        
+        // Get private key bytes for signing
         final privateKeyBytes = _wallet!.privateKeyBytes!;
+        
+        // Parse amount
         final amount = double.tryParse(_amountController.text) ?? 0.0;
         
         if (amount <= 0) {
@@ -619,30 +673,13 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
           return;
         }
         
-        // Convert recipient GNS key to Stellar address
-        final recipientStellarKey = _stellarService.gnsKeyToStellar(_recipientPk!);
-        
-        TransactionResult result;
-        
-        if (_selectedCurrency == 'GNS') {
-          result = await _stellarService.sendGns(
-            senderStellarPublicKey: senderStellarKey,
-            senderPrivateKeyBytes: privateKeyBytes,
-            recipientStellarPublicKey: recipientStellarKey,
-            amount: amount,
-          );
-        } else {
-          // Send USDC or EURC via Stellar!
-          final coin = _selectedCurrency == 'USD' ? Stablecoin.usdc : Stablecoin.eurc;
-          result = await _stellarService.sendStablecoin(
-            senderStellarPublicKey: senderStellarKey,
-            senderPrivateKeyBytes: privateKeyBytes,
-            recipientStellarPublicKey: recipientStellarKey,
-            amount: amount,
-            coin: coin,
-            memo: _memoController.text.isEmpty ? null : _memoController.text,
-          );
-        }
+        // Send GNS via Stellar! ðŸš€
+        final result = await _stellarService.sendGnsToGnsKey(
+          senderStellarPublicKey: senderStellarKey,
+          senderPrivateKeyBytes: privateKeyBytes,
+          recipientGnsPublicKey: _recipientPk!,
+          amount: amount,
+        );
         
         setState(() {
           _isSending = false;
@@ -746,7 +783,7 @@ class _SendMoneyScreenState extends State<SendMoneyScreen> {
                     color: AppTheme.textMuted(context),
                   ),
                 ),
-              // ✅ Stellar Explorer link for GNS transactions
+              // âœ… Stellar Explorer link for GNS transactions
               if (_selectedCurrency == 'GNS' && _sendResult?.transactionId != null) ...[
                 const SizedBox(height: 16),
                 TextButton.icon(

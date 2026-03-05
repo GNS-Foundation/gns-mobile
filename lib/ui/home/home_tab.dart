@@ -14,7 +14,7 @@ import '../../core/gns/identity_wallet.dart';
 import '../../core/chain/breadcrumb_engine.dart';
 import '../../core/profile/profile_service.dart';
 import '../../core/profile/identity_view_data.dart';
-import '../../core/tier_gate.dart';
+import '../../core/tier/tier_gate.dart';
 import '../../core/theme/theme_service.dart';
 import '../widgets/identity_card.dart';
 import '../screens/handle_management_screen.dart';

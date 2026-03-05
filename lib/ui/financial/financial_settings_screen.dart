@@ -200,9 +200,10 @@ class _FinancialSettingsScreenState extends State<FinancialSettingsScreen> {
             borderRadius: BorderRadius.circular(8),
           ),
           child: Center(
-            child: Text(
-              endpoint.icon,
-              style: const TextStyle(fontSize: 20),
+            child: Icon(
+              PaymentEndpointType.iconData(endpoint.type),
+              size: 20,
+              color: _getEndpointColor(endpoint.type),
             ),
           ),
         ),
@@ -210,13 +211,33 @@ class _FinancialSettingsScreenState extends State<FinancialSettingsScreen> {
           endpoint.displayName,
           style: const TextStyle(fontWeight: FontWeight.w500),
         ),
-        subtitle: Text(
-          _formatEndpointValue(endpoint),
-          style: TextStyle(
-            fontSize: 12,
-            color: AppTheme.textMuted(context),
-            fontFamily: 'monospace',
-          ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _formatEndpointValue(endpoint),
+              style: TextStyle(
+                fontSize: 12,
+                color: AppTheme.textMuted(context),
+                fontFamily: 'monospace',
+              ),
+            ),
+            const SizedBox(height: 3),
+            Row(
+              children: [
+                Icon(endpoint.visibility.icon, size: 11,
+                    color: AppTheme.textMuted(context)),
+                const SizedBox(width: 3),
+                Text(
+                  endpoint.visibility.label,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: AppTheme.textMuted(context),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
@@ -347,6 +368,7 @@ class _FinancialSettingsScreenState extends State<FinancialSettingsScreen> {
     final valueController = TextEditingController(text: existingEndpoint?.value ?? '');
     final labelController = TextEditingController(text: existingEndpoint?.label ?? '');
     String selectedType = existingEndpoint?.type ?? PaymentEndpointType.sepaIban;
+    EndpointVisibility selectedVisibility = existingEndpoint?.visibility ?? EndpointVisibility.public;
     
     showModalBottomSheet(
       context: context,
@@ -371,8 +393,39 @@ class _FinancialSettingsScreenState extends State<FinancialSettingsScreen> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(height: 24),
-              
+              const SizedBox(height: 8),
+
+              // ── Disclaimer ────────────────────────────────────────────────
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.primary.withOpacity(0.18)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.info_outline, size: 16, color: AppTheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'GNS is a payment directory — it tells people how to pay you, '
+                        'not a payment processor. Your addresses are stored on your '
+                        'device and optionally published to your public GNS identity '
+                        'based on the visibility you choose below.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary(ctx),
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+
               // Type selector
               Text(
                 'TYPE',
@@ -444,8 +497,55 @@ class _FinancialSettingsScreenState extends State<FinancialSettingsScreen> {
                   hintText: 'e.g., Personal Account',
                 ),
               ),
-              const SizedBox(height: 24),
-              
+              const SizedBox(height: 16),
+
+              // ── Visibility selector ───────────────────────────────────────
+              Text(
+                'VISIBILITY',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.textMuted(ctx),
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...EndpointVisibility.values.map((v) => RadioListTile<EndpointVisibility>(
+                value: v,
+                groupValue: selectedVisibility,
+                onChanged: (val) => setModalState(() => selectedVisibility = val!),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Row(
+                  children: [
+                    Icon(v.icon, size: 16,
+                        color: selectedVisibility == v
+                            ? AppTheme.primary
+                            : AppTheme.textSecondary(ctx)),
+                    const SizedBox(width: 6),
+                    Text(
+                      v.label,
+                      style: TextStyle(
+                        fontWeight: selectedVisibility == v
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+                subtitle: Text(
+                  v.description,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppTheme.textMuted(ctx),
+                    height: 1.3,
+                  ),
+                ),
+                activeColor: AppTheme.primary,
+              )),
+              const SizedBox(height: 20),
+
               // Save button
               SizedBox(
                 width: double.infinity,
@@ -470,6 +570,7 @@ class _FinancialSettingsScreenState extends State<FinancialSettingsScreen> {
                       value: value,
                       label: label,
                       chain: selectedType == PaymentEndpointType.ethAddress ? 'ethereum' : null,
+                      visibility: selectedVisibility,
                     );
                     
                     setState(() {

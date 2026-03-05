@@ -8,6 +8,7 @@
 //
 // Location: lib/core/financial/financial_module.dart
 
+import 'package:flutter/material.dart';
 import '../gns/gns_record.dart';
 
 /// Payment endpoint types supported by GNS
@@ -43,26 +44,29 @@ abstract class PaymentEndpointType {
     }
   }
   
-  /// Get icon for endpoint type
-  static String icon(String type) {
+  /// Get icon for endpoint type (uses Flutter IconData — no emoji encoding issues)
+  static IconData iconData(String type) {
     switch (type) {
       case sepaIban:
       case swiftAccount:
-        return '🏦';
+        return Icons.account_balance_outlined;
       case lightningLnurl:
       case lightningAddress:
-        return '⚡';
+        return Icons.bolt;
       case ethAddress:
       case evmToken:
-        return '💎';
+        return Icons.diamond_outlined;
       case solAddress:
-        return '☀️';
+        return Icons.wb_sunny_outlined;
       case btcAddress:
-        return '₿';
+        return Icons.currency_bitcoin;
       default:
-        return '💰';
+        return Icons.payments_outlined;
     }
   }
+
+  /// Legacy string icon — kept for any existing callers
+  static String icon(String type) => '';
   
   /// Check if this is a crypto rail
   static bool isCrypto(String type) {
@@ -76,6 +80,69 @@ abstract class PaymentEndpointType {
   /// Check if this is a fiat rail
   static bool isFiat(String type) {
     return [sepaIban, swiftAccount].contains(type);
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENDPOINT VISIBILITY
+// Controls whether a payment address is shared on the public GNS network.
+//
+//  public        → included in your GNS record; anyone resolving your @handle
+//                  can see and use this address to pay you.
+//  contacts_only → shared only with people you have accepted as contacts.
+//                  (not yet enforced server-side; reserved for Phase 6)
+//  private       → stored locally only; never published to the network.
+//                  Useful to keep your IBAN in the app for reference without
+//                  broadcasting it.
+// ─────────────────────────────────────────────────────────────────────────────
+enum EndpointVisibility {
+  public,
+  contactsOnly,
+  private;
+
+  String get label {
+    switch (this) {
+      case public:       return 'Public';
+      case contactsOnly: return 'Contacts only';
+      case private:      return 'Private (not shared)';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case public:
+        return 'Anyone can discover this address by looking up your @handle.';
+      case contactsOnly:
+        return 'Only people you have added as contacts can see this address.';
+      case private:
+        return 'Stored on this device only. Never published to the GNS network.';
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case public:       return Icons.public;
+      case contactsOnly: return Icons.group_outlined;
+      case private:      return Icons.lock_outline;
+    }
+  }
+
+  String toJson() {
+    switch (this) {
+      case public:       return 'public';
+      case contactsOnly: return 'contacts_only';
+      case private:      return 'private';
+    }
+  }
+
+  static EndpointVisibility fromJson(String? value) {
+    switch (value) {
+      case 'public':        return public;
+      case 'contacts_only': return contactsOnly;
+      case 'private':       return private;
+      default:              return public; // safe default
+    }
   }
 }
 
@@ -107,6 +174,9 @@ class PaymentEndpoint {
   /// Additional metadata
   final Map<String, dynamic>? metadata;
 
+  /// Who can see this endpoint on the GNS network
+  final EndpointVisibility visibility;
+
   PaymentEndpoint({
     required this.id,
     required this.type,
@@ -115,6 +185,7 @@ class PaymentEndpoint {
     this.label,
     this.chain,
     this.metadata,
+    this.visibility = EndpointVisibility.public,
   });
 
   Map<String, dynamic> toJson() => {
@@ -125,6 +196,7 @@ class PaymentEndpoint {
     if (label != null) 'label': label,
     if (chain != null) 'chain': chain,
     if (metadata != null) 'metadata': metadata,
+    'visibility': visibility.toJson(),
   };
 
   factory PaymentEndpoint.fromJson(Map<String, dynamic> json) {
@@ -136,6 +208,7 @@ class PaymentEndpoint {
       label: json['label'] as String?,
       chain: json['chain'] as String?,
       metadata: json['metadata'] as Map<String, dynamic>?,
+      visibility: EndpointVisibility.fromJson(json['visibility'] as String?),
     );
   }
 
@@ -451,15 +524,25 @@ class FinancialModule {
   static const String moduleId = 'financial';
   static const String schema = FinancialModuleSchemas.financial;
 
-  /// Create a GnsModule containing financial data
+  /// Create a GnsModule containing financial data for network publication.
+  ///
+  /// Only endpoints with visibility == public are included in the published
+  /// record. contacts_only and private endpoints stay on device only.
   static GnsModule create(FinancialData data) {
+    // Strip non-public endpoints before publishing
+    final publishableData = data.copyWith(
+      paymentEndpoints: data.paymentEndpoints
+          .where((e) => e.visibility == EndpointVisibility.public)
+          .toList(),
+    );
+
     return GnsModule(
       id: moduleId,
       schema: schema,
       name: 'Financial',
       description: 'Payment endpoints and financial preferences',
-      isPublic: false,  // Financial data is private by default
-      config: data.toJson(),
+      isPublic: true,   // Public endpoints are the payment directory
+      config: publishableData.toJson(),
     );
   }
 

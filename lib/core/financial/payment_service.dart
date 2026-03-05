@@ -45,11 +45,11 @@ class IncomingPayment {
   }
 
   static const _currencySymbols = {
-    'EUR': '€',
+    'EUR': 'â‚¬',
     'USD': '\$',
-    'GBP': '£',
-    'BTC': '₿',
-    'ETH': 'Ξ',
+    'GBP': 'Â£',
+    'BTC': 'â‚¿',
+    'ETH': 'Îž',
   };
 
   factory IncomingPayment.fromJson(Map<String, dynamic> json) {
@@ -138,7 +138,7 @@ class PaymentService {
     
     await _loadFinancialData();
     _initialized = true;
-    debugPrint('💰 PaymentService initialized');
+    debugPrint('ðŸ’° PaymentService initialized');
   }
   
   /// Load or create financial data
@@ -164,7 +164,7 @@ class PaymentService {
       _fetchIncomingPayments();
     });
     
-    debugPrint('📡 Payment polling started (${interval.inSeconds}s interval)');
+    debugPrint('ðŸ“¡ Payment polling started (${interval.inSeconds}s interval)');
   }
   
   /// Stop polling
@@ -172,7 +172,7 @@ class PaymentService {
     _pollingTimer?.cancel();
     _pollingTimer = null;
     _isPolling = false;
-    debugPrint('📡 Payment polling stopped');
+    debugPrint('ðŸ“¡ Payment polling stopped');
   }
   
   /// Fetch incoming payments from server
@@ -411,35 +411,55 @@ class PaymentService {
   }
   
   /// Save financial data settings
-  Future<void> saveFinancialData(FinancialData data) async {
+  /// Save financial data AND publish to the GNS network.
+  /// This makes the payment directory work — other users can discover
+  /// your IBAN / Lightning address / crypto address by resolving your
+  /// @handle and reading the financial module from your GNS record.
+  Future<bool> saveFinancialData(FinancialData data) async {
     _financialData = data;
-    // TODO: Persist to GNS record
-    debugPrint('💾 Financial data saved');
+
+    // Publish to network so others can discover your payment endpoints
+    final published = await _wallet.updateFinancialData(data);
+
+    if (published) {
+      debugPrint('💳 Financial data saved & published to GNS network');
+    } else {
+      debugPrint('💳 Financial data saved locally (will retry on next app start)');
+    }
+    return published;
   }
   
-  /// Calculate route for a payment (using IdupRouter)
+  /// Calculate the best payment route using IdupRouter.
+  ///
+  /// [recipientFinancial] is fetched from the GNS network by send_money_screen
+  /// after resolving the recipient's @handle. If not provided or empty, returns
+  /// null (GNS relay fallback).
   RouteResult? calculateRoute({
     required String recipientPk,
     required String amount,
     required String currency,
     FinancialData? recipientFinancial,
   }) {
-    // If we don't have recipient's financial data, return null
     if (recipientFinancial == null || recipientFinancial.paymentEndpoints.isEmpty) {
+      debugPrint('💳 calculateRoute: no recipient endpoints → null (GNS relay)');
       return null;
     }
-    
+
     final result = IdupRouter.selectRoute(
       senderFinancial: _financialData,
       recipientFinancial: recipientFinancial,
       amount: double.parse(amount),
       currency: currency,
     );
-    
+
     if (result is RouteResult) {
+      debugPrint('💳 calculateRoute: selected ${result.route.type} '
+          '(${result.selectionReason})');
       return result;
     }
-    
+
+    // RouteSelectionError
+    debugPrint('💳 calculateRoute: no compatible rail — ${result.toString()}');
     return null;
   }
   

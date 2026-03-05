@@ -1,6 +1,6 @@
-/// Browser Pairing Service - QR Auth for Panthera Browser
+/// Browser Pairing Service v2 - QR Auth WITH Message Sync
 /// 
-/// Handles scanning QR codes from browser and approving sessions.
+/// Phase B: Mobile decrypts messages and sends to browser
 /// 
 /// Location: lib/core/auth/browser_pairing_service.dart
 
@@ -8,7 +8,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
+import 'package:cryptography/cryptography.dart';
+
+// Your existing imports - adjust paths as needed
 import '../gns/identity_wallet.dart';
+import '../comm/message_storage.dart';
+import '../comm/gns_envelope.dart';
+import '../vault/gns_channel_service.dart';
 
 /// QR code data from browser
 class BrowserAuthRequest {
@@ -49,8 +55,8 @@ class BrowserAuthRequest {
   }
 
   bool get isExpired => DateTime.now().millisecondsSinceEpoch > expiresAt;
-  
   bool get isValid => type == 'gns_browser_auth' && !isExpired;
+  bool get supportsMessageSync => version >= 2;
 
   Duration get timeRemaining {
     final remaining = expiresAt - DateTime.now().millisecondsSinceEpoch;
@@ -58,30 +64,94 @@ class BrowserAuthRequest {
   }
 }
 
+/// Decrypted message for sync
+class DecryptedMessageSync {
+  final String id;
+  final String direction; // 'incoming' or 'outgoing'
+  final String text;
+  final int timestamp;
+  final String? status;
+
+  DecryptedMessageSync({
+    required this.id,
+    required this.direction,
+    required this.text,
+    required this.timestamp,
+    this.status,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'direction': direction,
+    'text': text,
+    'timestamp': timestamp,
+    if (status != null) 'status': status,
+  };
+}
+
+/// Conversation sync data
+class ConversationSync {
+  final String withPublicKey;
+  final String? withHandle;
+  final List<DecryptedMessageSync> messages;
+  final int lastSyncedAt;
+
+  ConversationSync({
+    required this.withPublicKey,
+    this.withHandle,
+    required this.messages,
+    required this.lastSyncedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'withPublicKey': withPublicKey,
+    if (withHandle != null) 'withHandle': withHandle,
+    'messages': messages.map((m) => m.toJson()).toList(),
+    'lastSyncedAt': lastSyncedAt,
+  };
+}
+
+
+
 /// Result of approval/rejection
 class BrowserAuthResult {
   final bool success;
   final String? error;
   final String? sessionId;
+  final String? sessionToken;   // stored by app to reconnect channel
+  final int messagesSynced;
 
-  BrowserAuthResult.success(this.sessionId) : success = true, error = null;
-  BrowserAuthResult.failure(this.error) : success = false, sessionId = null;
+  BrowserAuthResult.success(this.sessionId, {this.messagesSynced = 0, this.sessionToken})
+      : success = true, error = null;
+  BrowserAuthResult.failure(this.error)
+      : success = false, sessionId = null, sessionToken = null, messagesSynced = 0;
 }
 
-/// Browser Pairing Service
+/// Browser Pairing Service v2
+/// 
+/// Key changes from v1:
+/// - Generates SESSION encryption keys (not permanent)
+/// - Decrypts recent messages before approval
+/// - Sends pre-decrypted history to browser
 class BrowserPairingService {
   static const String _baseUrl = 'https://gns-browser-production.up.railway.app';
+  static const int _maxConversationsToSync = 20;
+  static const int _maxMessagesPerConversation = 50;
   
   final IdentityWallet _wallet;
+  final MessageStorage _storage;
   final Dio _dio;
 
-  BrowserPairingService({required IdentityWallet wallet})
-      : _wallet = wallet,
-        _dio = Dio(BaseOptions(
-          baseUrl: _baseUrl,
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
-        ));
+  BrowserPairingService({
+    required IdentityWallet wallet,
+    required MessageStorage storage,
+  }) : _wallet = wallet,
+       _storage = storage,
+       _dio = Dio(BaseOptions(
+         baseUrl: _baseUrl,
+         connectTimeout: const Duration(seconds: 15),
+         receiveTimeout: const Duration(seconds: 15),
+       ));
 
   /// Parse QR code data
   BrowserAuthRequest? parseQRCode(String qrData) {
@@ -89,25 +159,121 @@ class BrowserPairingService {
       final request = BrowserAuthRequest.fromQRData(qrData);
       
       if (!request.isValid) {
-        debugPrint('❌ Invalid or expired QR code');
+        debugPrint('âŒ Invalid or expired QR code');
         return null;
       }
       
-      debugPrint('✅ Valid browser auth QR: ${request.sessionId.substring(0, 8)}...');
+      debugPrint('âœ… Valid browser auth QR: ${request.sessionId.substring(0, 8)}...');
       debugPrint('   Browser: ${request.browserInfo}');
+      debugPrint('   Version: ${request.version} (sync: ${request.supportsMessageSync})');
       debugPrint('   Expires in: ${request.timeRemaining.inSeconds}s');
       
       return request;
     } catch (e) {
-      debugPrint('❌ Failed to parse QR code: $e');
+      debugPrint('âŒ Failed to parse QR code: $e');
       return null;
     }
   }
 
 
-  /// Approve browser session
-  /// Signs the challenge with the user's Ed25519 private key
-  /// ✅ UPDATED: Now includes X25519 encryption private key for browser decryption
+
+  /// Prepare recent messages for sync
+  /// Messages are ALREADY DECRYPTED in MessageStorage!
+  Future<List<ConversationSync>> _prepareMessageSync() async {
+    debugPrint('ðŸ“¨ Preparing message sync for browser...');
+    
+    final myPublicKey = _wallet.publicKey;
+    if (myPublicKey == null) {
+      debugPrint('   âš ï¸ No public key available');
+      return [];
+    }
+    
+    final results = <ConversationSync>[];
+    
+    try {
+      // 1. Get recent threads from MessageStorage
+      final threads = await _storage.getThreads(
+        includeArchived: false,
+        limit: _maxConversationsToSync,
+      );
+      
+      debugPrint('   Found ${threads.length} conversations');
+      
+      // 2. For each thread, get messages
+      for (final threadPreview in threads) {
+        final thread = threadPreview.thread;
+        
+        // Skip group chats for now (direct only)
+        if (!thread.isDirect) {
+          debugPrint('   Skipping group thread: ${thread.id}');
+          continue;
+        }
+        
+        // Get the other participant's public key
+        final otherPublicKey = thread.otherParticipant(myPublicKey);
+        if (otherPublicKey == null) {
+          debugPrint('   âš ï¸ Could not determine other party for thread: ${thread.id}');
+          continue;
+        }
+        
+        // 3. Get messages for this thread (ALREADY DECRYPTED in storage!)
+        final messages = await _storage.getMessages(
+          thread.id,
+          limit: _maxMessagesPerConversation,
+        );
+        
+        if (messages.isEmpty) {
+          debugPrint('   Skipping empty thread: ${thread.title ?? thread.id}');
+          continue;
+        }
+        
+        // 4. Transform GnsMessage to DecryptedMessageSync
+        final syncMessages = <DecryptedMessageSync>[];
+        
+        for (final msg in messages) {
+          // Get text content - messages are already decrypted in MessageStorage
+          final text = msg.textContent ?? msg.previewText;
+          
+          if (text.isEmpty || text == 'Message deleted') {
+            continue;
+          }
+          
+          syncMessages.add(DecryptedMessageSync(
+            id: msg.id,
+            direction: msg.isOutgoing ? 'outgoing' : 'incoming',
+            text: text,
+            timestamp: msg.timestamp.millisecondsSinceEpoch,
+            status: msg.status.name,
+          ));
+        }
+        
+        if (syncMessages.isEmpty) continue;
+        
+        // 5. Build conversation sync object
+        results.add(ConversationSync(
+          withPublicKey: otherPublicKey,
+          withHandle: thread.title,  // This is often the handle
+          messages: syncMessages,
+          lastSyncedAt: DateTime.now().millisecondsSinceEpoch,
+        ));
+        
+        debugPrint('   âœ… ${thread.title ?? otherPublicKey.substring(0, 8)}: ${syncMessages.length} messages');
+      }
+      
+      final totalMessages = results.fold<int>(0, (sum, c) => sum + c.messages.length);
+      debugPrint('ðŸ“¨ Sync prepared: ${results.length} conversations, $totalMessages messages');
+      
+      return results;
+      
+    } catch (e, stack) {
+      debugPrint('âŒ Error preparing message sync: $e');
+      debugPrint('   Stack: $stack');
+      return [];
+    }
+  }
+
+  /// Approve browser session WITH message sync
+  /// This is the key Phase B method
   Future<BrowserAuthResult> approveSession(BrowserAuthRequest request) async {
     try {
       if (!request.isValid) {
@@ -118,13 +284,27 @@ class BrowserPairingService {
         return BrowserAuthResult.failure('Wallet not initialized');
       }
 
-      debugPrint('🔐 Signing browser approval...');
+      debugPrint('ðŸ” Approving browser session with message sync...');
 
-      // Get current handle
-      final handle = await _wallet.getCurrentHandle();
+      // âœ… Get mobile's PERMANENT encryption key from wallet
+      // Browser will use this to create dual-encrypted envelopes
+      final mobileEncryptionKey = _wallet.encryptionPublicKeyHex;
+      
+      if (mobileEncryptionKey == null) {
+        return BrowserAuthResult.failure('Wallet encryption key not available');
+      }
+      
+      debugPrint('   ðŸ”‘ Mobile encryption key: ${mobileEncryptionKey.substring(0, 16)}...');
 
-      // Build the data to sign (must match backend exactly)
-      // canonicalJson sorts keys alphabetically
+      // Decrypt recent messages for sync (if browser supports it)
+      List<ConversationSync> messageSync = [];
+      if (request.supportsMessageSync) {
+        messageSync = await _prepareMessageSync();
+      }
+      
+      final totalMessages = messageSync.fold<int>(0, (sum, c) => sum + c.messages.length);
+
+      // 3. Sign the approval
       final signedData = {
         'action': 'approve',
         'challenge': request.challenge,
@@ -132,11 +312,9 @@ class BrowserPairingService {
         'sessionId': request.sessionId,
       };
 
-      // Canonical JSON (alphabetically sorted keys)
       final canonicalString = _canonicalJson(signedData);
-      debugPrint('   Signing: ${canonicalString.substring(0, 50)}...');
+      debugPrint('   Signing approval...');
 
-      // Sign with Ed25519
       final signature = await _wallet.signBytes(utf8.encode(canonicalString));
       
       if (signature == null) {
@@ -144,50 +322,60 @@ class BrowserPairingService {
       }
 
       final signatureHex = _bytesToHex(signature);
-      debugPrint('   ✅ Signature: ${signatureHex.substring(0, 24)}...');
 
-      // ✅ NEW: Get X25519 encryption keys
-      final encryptionPublicKey = _wallet.encryptionPublicKeyHex;
-      final encryptionPrivateKey = _wallet.encryptionPrivateKeyBytes;
+      // 4. Send approval with session keys + message sync
+      debugPrint('   Sending approval to server...');
       
-      if (encryptionPublicKey == null || encryptionPrivateKey == null) {
-        return BrowserAuthResult.failure('Encryption keys not available');
-      }
-      
-      final encryptionPrivateKeyHex = _bytesToHex(encryptionPrivateKey);
-      
-      debugPrint('   🔑 Including X25519 keys for browser decryption');
-      debugPrint('   X25519 Public:  ${encryptionPublicKey.substring(0, 16)}...');
-      debugPrint('   X25519 Private: ${encryptionPrivateKeyHex.substring(0, 16)}...');
-
-      // Send approval to backend with encryption keys
       final response = await _dio.post(
         '/auth/sessions/approve',
         data: {
           'sessionId': request.sessionId,
           'publicKey': _wallet.publicKey,
-          'handle': handle,  // ✅ Include handle
           'signature': signatureHex,
-          // ✅ NEW: Include X25519 keys for browser E2E encryption
-          'encryptionKey': encryptionPublicKey,
-          'encryptionPrivateKey': encryptionPrivateKeyHex,  // ✅ For browser decryption
           'deviceInfo': {
             'platform': defaultTargetPlatform.name,
             'approvedAt': DateTime.now().toIso8601String(),
+          },
+          // âœ… CRITICAL: Mobile's PERMANENT X25519 public key for dual encryption
+          // Browser will use this to encrypt the "sender copy" of messages
+          // This is the wallet's permanent encryption key, NOT a temporary session key!
+          'encryptionKey': mobileEncryptionKey,  // â† Wallet's permanent key!
+          
+          // Pre-decrypted message history
+          'messageSync': {
+            'conversations': messageSync.map((c) => c.toJson()).toList(),
           },
         },
       );
 
       if (response.statusCode == 200 && response.data['success'] == true) {
-        debugPrint('✅ Browser session approved with encryption keys!');
-        return BrowserAuthResult.success(request.sessionId);
+        final messagesSynced = response.data['data']?['messagesSynced'] ?? totalMessages;
+        final sessionToken   = response.data['data']?['sessionToken'] as String?;
+
+        debugPrint('[PAIRING] Browser session approved! Messages: $messagesSynced');
+
+        // Connect the persistent mobile WebSocket channel.
+        // This receives credential_request events from the Chrome extension in real-time.
+        if (sessionToken != null && _wallet.publicKey != null) {
+          debugPrint('[PAIRING] Starting persistent mobile channel...');
+          await GnsChannelService().connect(
+            publicKey:    _wallet.publicKey!,
+            sessionToken: sessionToken,
+          );
+        }
+
+        return BrowserAuthResult.success(
+          request.sessionId,
+          messagesSynced: messagesSynced,
+          sessionToken: sessionToken,
+        );
       } else {
         final error = response.data['error'] ?? 'Approval failed';
-        debugPrint('❌ Approval failed: $error');
+        debugPrint('âŒ Approval failed: $error');
         return BrowserAuthResult.failure(error);
       }
     } catch (e) {
-      debugPrint('❌ Approval error: $e');
+      debugPrint('âŒ Approval error: $e');
       if (e is DioException) {
         final message = e.response?.data?['error'] ?? e.message;
         return BrowserAuthResult.failure(message);
@@ -199,9 +387,8 @@ class BrowserPairingService {
   /// Reject browser session
   Future<BrowserAuthResult> rejectSession(BrowserAuthRequest request) async {
     try {
-      debugPrint('❌ Rejecting browser session...');
+      debugPrint('âŒ Rejecting browser session...');
 
-      // Build signed rejection
       final signedData = {
         'action': 'reject',
         'challenge': request.challenge,
@@ -222,10 +409,10 @@ class BrowserPairingService {
         },
       );
 
-      debugPrint('✅ Browser session rejected');
+      debugPrint('âœ… Browser session rejected');
       return BrowserAuthResult.success(request.sessionId);
     } catch (e) {
-      debugPrint('❌ Reject error: $e');
+      debugPrint('âŒ Reject error: $e');
       return BrowserAuthResult.failure(e.toString());
     }
   }
