@@ -1,27 +1,47 @@
+'use client';
+
+import { useState, useEffect } from 'react';
 import { SearchBar } from '@/components/ui/SearchBar';
-import { IdentityCard } from '@/components/identity/IdentityCard';
-import { MOCK_IDENTITY } from '@/lib/api';
 import Link from 'next/link';
 
+const HIVE_STATUS_URL = 'https://gns-browser-production.up.railway.app/hive/status';
+
+interface HiveStatus {
+  active_nodes: number;
+  total_tflops: number;
+  total_tokens_distributed: number;
+  pipeline_cells: number;
+}
+
 export default function HomePage() {
-  // Featured identities (would come from API in production)
-  const featuredIdentities = [
-    { ...MOCK_IDENTITY, handle: 'caterve', displayName: 'Camilo Ayerbe' },
-  ];
+  const [hive, setHive] = useState<HiveStatus | null>(null);
+
+  useEffect(() => {
+    const fetchHive = () =>
+      fetch(HIVE_STATUS_URL)
+        .then(r => r.json())
+        .then(d => d.success && setHive(d.data))
+        .catch(() => {});
+
+    fetchHive();
+    const timer = setInterval(fetchHive, 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   return (
     <div className="min-h-screen">
-      {/* Hero Section */}
+
+      {/* ── Hero ─────────────────────────────────────────── */}
       <section className="relative overflow-hidden">
-        {/* Background gradient */}
         <div className="absolute inset-0 bg-gradient-to-br from-gns-primary/10 via-transparent to-gns-secondary/10" />
-        
+
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 sm:py-32">
           <div className="text-center max-w-3xl mx-auto">
+
             {/* Badge */}
             <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gns-primary/10 text-gns-primary text-sm font-medium mb-6">
-              <span>🌐</span>
-              <span>The Identity Graph for Humans</span>
+              <span>⬡</span>
+              <span>Identity · AI · Presence</span>
             </div>
 
             {/* Headline */}
@@ -31,38 +51,81 @@ export default function HomePage() {
             </h1>
 
             {/* Subheadline */}
-            <p className="text-lg sm:text-xl text-[var(--text-secondary)] mb-10 max-w-2xl mx-auto">
-              Discover verified people, places, and businesses by their @handle. 
-              Every identity is cryptographically proven through presence.
+            <p className="text-lg sm:text-xl text-[var(--text-secondary)] mb-8 max-w-2xl mx-auto">
+              Discover verified people, organisations, and AI agents by their @handle.
+              Every identity is cryptographically proven through physical presence.
             </p>
 
             {/* Search Bar */}
             <div className="max-w-xl mx-auto">
-              <SearchBar size="lg" placeholder="Search @handle or place..." autoFocus />
+              <SearchBar size="lg" placeholder="Search @handle or ask anything..." autoFocus />
             </div>
 
             {/* Quick Links */}
             <div className="mt-6 flex flex-wrap justify-center gap-3 text-sm">
               <span className="text-[var(--text-muted)]">Try:</span>
-              <Link href="/caterve" className="text-gns-primary hover:underline">@caterve</Link>
-              <span className="text-[var(--text-muted)]">•</span>
-              <Link href="/entity/colosseum" className="text-gns-primary hover:underline">Colosseum</Link>
-              <span className="text-[var(--text-muted)]">•</span>
+              <Link href="/camiloayerbe" className="text-gns-primary hover:underline">@camiloayerbe</Link>
+              <span className="text-[var(--text-muted)]">·</span>
+              <Link href="/hai" className="text-gns-primary hover:underline">@hai</Link>
+              <span className="text-[var(--text-muted)]">·</span>
               <Link href="/search?q=rome" className="text-gns-primary hover:underline">Rome</Link>
             </div>
           </div>
         </div>
       </section>
 
-      {/* How It Works Section */}
+      {/* ── Hive Status ──────────────────────────────────── */}
+      {hive && (
+        <section className="py-8 border-y border-[var(--border)] bg-[var(--surface)]">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-sm font-semibold text-[var(--text-primary)]">
+                  GEIANT Hive — Network Live
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-6 text-sm font-mono">
+                <span className="text-[var(--text-secondary)]">
+                  <span className="text-gns-primary font-bold">{hive.active_nodes}</span> nodes online
+                </span>
+                <span className="text-[var(--text-muted)]">·</span>
+                <span className="text-[var(--text-secondary)]">
+                  <span className="text-gns-primary font-bold">{hive.total_tflops.toFixed(1)}</span> TFLOPS
+                </span>
+                <span className="text-[var(--text-muted)]">·</span>
+                <span className="text-[var(--text-secondary)]">
+                  <span className="text-green-500 font-bold">{hive.total_tokens_distributed.toFixed(4)}</span> GNS earned
+                </span>
+                {hive.pipeline_cells > 0 && (
+                  <>
+                    <span className="text-[var(--text-muted)]">·</span>
+                    <span className="text-green-500 font-semibold">
+                      {hive.pipeline_cells} pipeline cell{hive.pipeline_cells !== 1 ? 's' : ''}
+                    </span>
+                  </>
+                )}
+                <a
+                  href="https://hive.geiant.com/console"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-gns-primary hover:underline"
+                >
+                  View console →
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ── How It Works ─────────────────────────────────── */}
       <section className="py-20 bg-[var(--surface)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <h2 className="text-3xl font-bold text-center text-[var(--text-primary)] mb-12">
             How GNS Works
           </h2>
-
           <div className="grid md:grid-cols-3 gap-8">
-            {/* Step 1 */}
             <div className="text-center">
               <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gns-primary/10 flex items-center justify-center">
                 <span className="text-3xl">🔑</span>
@@ -74,8 +137,6 @@ export default function HomePage() {
                 Your identity is a cryptographic keypair. No passwords, no emails, no phone numbers.
               </p>
             </div>
-
-            {/* Step 2 */}
             <div className="text-center">
               <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gns-secondary/10 flex items-center justify-center">
                 <span className="text-3xl">🍞</span>
@@ -87,72 +148,30 @@ export default function HomePage() {
                 Drop cryptographic breadcrumbs as you move. 100 breadcrumbs earn you a permanent @handle.
               </p>
             </div>
-
-            {/* Step 3 */}
             <div className="text-center">
               <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gns-accent/10 flex items-center justify-center">
-                <span className="text-3xl">🌐</span>
+                <span className="text-3xl">⬡</span>
               </div>
               <h3 className="text-xl font-semibold mb-2 text-[var(--text-primary)]">
-                Connect Globally
+                Contribute Compute
               </h3>
               <p className="text-[var(--text-secondary)]">
-                Message anyone by @handle. Send payments. Verify businesses. All decentralized.
+                Your devices join the GEIANT Hive. Every AI request you relay earns GNS tokens. Your phone is a bee.
               </p>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Featured Identities */}
-      <section className="py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between mb-8">
-            <h2 className="text-2xl font-bold text-[var(--text-primary)]">
-              Featured Identities
-            </h2>
-            <Link href="/search" className="text-gns-primary hover:underline text-sm">
-              View all →
-            </Link>
-          </div>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {featuredIdentities.map((identity) => (
-              <Link key={identity.publicKey} href={`/${identity.handle}`}>
-                <IdentityCard 
-                  identity={identity} 
-                  size="sm" 
-                  showQR={false}
-                  showLinks={false}
-                />
-              </Link>
-            ))}
-            
-            {/* Placeholder cards */}
-            <div className="gns-card p-6 flex flex-col items-center justify-center min-h-[200px] border-dashed">
-              <span className="text-4xl mb-3">🌱</span>
-              <p className="text-[var(--text-muted)] text-center">
-                More identities coming soon
-              </p>
-            </div>
-            <div className="gns-card p-6 flex flex-col items-center justify-center min-h-[200px] border-dashed">
-              <span className="text-4xl mb-3">🏪</span>
-              <p className="text-[var(--text-muted)] text-center">
-                Businesses & places
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
+      {/* ── CTA ──────────────────────────────────────────── */}
       <section className="py-20 bg-gradient-to-br from-gns-primary to-gns-secondary">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6">
             Ready to Claim Your Identity?
           </h2>
           <p className="text-lg text-white/80 mb-8 max-w-2xl mx-auto">
-            Download Globe Crumbs, create your cryptographic identity, and start collecting breadcrumbs to earn your @handle.
+            Download Globe Crumbs, create your cryptographic identity, and start collecting
+            breadcrumbs to earn your @handle — and join the Hive.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <a
@@ -167,35 +186,39 @@ export default function HomePage() {
               <span>Download for iOS</span>
             </a>
             <a
-              href="https://play.google.com/store/apps/details?id=xyz.gns.globecrumbs"
+              href="https://hive.geiant.com/console"
               target="_blank"
               rel="noopener noreferrer"
               className="px-8 py-4 bg-white/10 text-white font-semibold rounded-xl hover:bg-white/20 transition-colors border border-white/30 flex items-center justify-center gap-2"
             >
-              <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.53,12.9 20.18,13.18L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z"/>
-              </svg>
-              <span>Coming to Android</span>
+              <span>⬡</span>
+              <span>Join the Hive</span>
             </a>
           </div>
         </div>
       </section>
 
-      {/* Stats Section */}
+      {/* ── Stats ────────────────────────────────────────── */}
       <section className="py-16 border-t border-[var(--border)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
             <div>
-              <p className="text-3xl font-bold text-gns-primary">1</p>
-              <p className="text-[var(--text-muted)] text-sm mt-1">Identity Created</p>
+              <p className="text-3xl font-bold text-gns-primary">
+                {hive ? hive.active_nodes : '—'}
+              </p>
+              <p className="text-[var(--text-muted)] text-sm mt-1">Hive Nodes Online</p>
             </div>
             <div>
-              <p className="text-3xl font-bold text-gns-secondary">106</p>
-              <p className="text-[var(--text-muted)] text-sm mt-1">Breadcrumbs Dropped</p>
+              <p className="text-3xl font-bold text-gns-secondary">
+                {hive ? `${hive.total_tflops.toFixed(1)}` : '—'}
+              </p>
+              <p className="text-[var(--text-muted)] text-sm mt-1">TFLOPS Available</p>
             </div>
             <div>
-              <p className="text-3xl font-bold text-gns-accent">1</p>
-              <p className="text-[var(--text-muted)] text-sm mt-1">Handle Claimed</p>
+              <p className="text-3xl font-bold text-gns-accent">
+                {hive ? hive.total_tokens_distributed.toFixed(2) : '—'}
+              </p>
+              <p className="text-[var(--text-muted)] text-sm mt-1">GNS Distributed</p>
             </div>
             <div>
               <p className="text-3xl font-bold text-[var(--text-primary)]">∞</p>
@@ -204,6 +227,7 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
     </div>
   );
 }
