@@ -170,6 +170,7 @@ class MessageBubble extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildContent(),
+              _buildProofFooter(),
               const SizedBox(height: 4),
               _buildTimestamp(),
             ],
@@ -202,6 +203,42 @@ class MessageBubble extends StatelessWidget {
           fontSize: 12,
           fontStyle: FontStyle.italic,
         ),
+      ),
+    );
+  }
+
+  Widget _buildProofFooter() {
+    // Only show for incoming messages with proof metadata
+    if (message.isOutgoing) return const SizedBox.shrink();
+    if (message.payload is! TextPayload) return const SizedBox.shrink();
+    final proof = (message.payload as TextPayload).proof;
+    if (proof == null) return const SizedBox.shrink();
+    
+    final epoch = proof.epoch;
+    final model = proof.model;
+    
+    return Container(
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF00b4a0).withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.verified_outlined, size: 11, color: Color(0xFF00997a)),
+          const SizedBox(width: 4),
+          Text(
+            'Rome · epoch $epoch · $model · Proof',
+            style: const TextStyle(
+              fontSize: 9,
+              color: Color(0xFF00997a),
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
       ),
     );
   }

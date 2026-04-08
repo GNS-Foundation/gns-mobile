@@ -192,6 +192,25 @@ abstract class GnsPayload {
   }
 }
 
+/// Hive compute proof metadata
+class HiveProof {
+  final int epoch;
+  final String cell;
+  final String model;
+  final String worker;
+
+  HiveProof({required this.epoch, required this.cell, required this.model, required this.worker});
+
+  factory HiveProof.fromJson(Map<String, dynamic> json) => HiveProof(
+    epoch: json["epoch"] as int,
+    cell: json["cell"] as String,
+    model: json["model"] as String,
+    worker: json["worker"] as String,
+  );
+
+  Map<String, dynamic> toJson() => {"epoch": epoch, "cell": cell, "model": model, "worker": worker};
+}
+
 /// Simple text message
 class TextPayload extends GnsPayload {
   @override
@@ -206,11 +225,15 @@ class TextPayload extends GnsPayload {
   /// Optional link previews
   final List<LinkPreview>? linkPreviews;
 
+  /// Hive compute proof (present on @hai responses)
+  final HiveProof? proof;
+
   TextPayload({
     this.type = PayloadType.textPlain,
     required this.text,
     this.preview,
     this.linkPreviews,
+    this.proof,
   });
 
   @override
@@ -218,6 +241,7 @@ class TextPayload extends GnsPayload {
     'text': text,
     'preview': preview,
     'linkPreviews': linkPreviews?.map((l) => l.toJson()).toList(),
+    if (proof != null) 'proof': proof!.toJson(),
   };
 
   factory TextPayload.fromJson(Map<String, dynamic> json) => TextPayload(
@@ -226,6 +250,7 @@ class TextPayload extends GnsPayload {
     linkPreviews: json['linkPreviews'] != null
         ? (json['linkPreviews'] as List).map((l) => LinkPreview.fromJson(l)).toList()
         : null,
+    proof: json["proof"] != null ? HiveProof.fromJson(json["proof"] as Map<String, dynamic>) : null,
   );
   
   /// Create plain text
