@@ -160,6 +160,7 @@ class _EmailListScreenState extends State<EmailListScreen> {
 
   Future<void> _loadEmails() async {
     try {
+      if (!mounted) return;
       setState(() => _loading = true);
       
       debugPrint('📧 _loadEmails: Starting email load...');
@@ -228,12 +229,14 @@ class _EmailListScreenState extends State<EmailListScreen> {
       // Sort by most recent
       threads.sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
       
+      if (!mounted) return;
       setState(() {
         _emailThreads = threads;
         _loading = false;
         _error = null;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;

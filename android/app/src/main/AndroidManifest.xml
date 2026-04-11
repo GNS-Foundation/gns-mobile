@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="id.gns.browser">
     
+    <!-- Remove unused permissions from plugins -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" tools:node="remove" />
+
     <!-- NFC Permissions -->
     <uses-permission android:name="android.permission.NFC" />
     

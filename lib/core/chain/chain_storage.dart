@@ -6,11 +6,13 @@
 /// Location: lib/core/chain/chain_storage.dart
 
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'breadcrumb_block.dart';
+import '../gns/gns_record.dart';
 
 class ChainStorage {
   static final ChainStorage _instance = ChainStorage._internal();
@@ -24,7 +26,7 @@ class ChainStorage {
     if (_initialized) return;
 
     final documentsDir = await getApplicationDocumentsDirectory();
-    final dbPath = join(documentsDir.path, 'gns_chain.db');
+    final dbPath = p.join(documentsDir.path, 'gns_chain.db');
 
     _database = await openDatabase(
       dbPath,
@@ -279,6 +281,9 @@ class ChainStorage {
     return results.map(_rowToBlock).toList();
   }
 
+  /// Alias for [getFullChain] used by GEP claim service.
+  Future<List<BreadcrumbBlock>> getAllBlocks() => getFullChain();
+
   Future<List<BreadcrumbBlock>> getRecentBlocks({int limit = 50}) async {
     await _ensureInitialized();
     final results = await _database!.query('breadcrumbs', orderBy: 'block_index DESC', limit: limit);
@@ -339,6 +344,34 @@ class ChainStorage {
       metaFlags: jsonDecode(row['meta_flags'] as String) as Map<String, dynamic>,
       signature: row['signature'] as String,
     );
+  }
+
+  // ==================== GNS RECORD PERSISTENCE ====================
+
+  /// Load the locally saved [GnsRecord] from disk.
+  Future<GnsRecord?> loadRecord() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File(p.join(dir.path, 'gns_local_record.json'));
+      if (!await file.exists()) return null;
+      final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      return GnsRecord.fromJson(json);
+    } catch (e) {
+      debugPrint('⚠️ loadRecord error: $e');
+      return null;
+    }
+  }
+
+  /// Persist a [GnsRecord] to disk.
+  Future<void> saveRecord(GnsRecord record) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File(p.join(dir.path, 'gns_local_record.json'));
+      await file.writeAsString(jsonEncode(record.toJson()));
+      debugPrint('GNS record saved to disk');
+    } catch (e) {
+      debugPrint('⚠️ saveRecord error: $e');
+    }
   }
 
   Future<void> close() async {

@@ -65,7 +65,10 @@ class CallKitService {
       // flutter_callkit_incoming handles PushKit registration automatically
       // The token comes via the event listener
       _voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
-      debugPrint('📲 VoIP token: ${_voipToken?.substring(0, 20)}...');
+      final displayToken = (_voipToken?.length ?? 0) > 20 
+          ? '${_voipToken!.substring(0, 20)}...' 
+          : _voipToken;
+      debugPrint('📲 VoIP token: $displayToken');
     } catch (e) {
       debugPrint('⚠️ Failed to get VoIP token: $e');
     }
@@ -78,7 +81,7 @@ class CallKitService {
     required String deviceId,
     String? appVersion,
   }) async {
-    if (_voipToken == null) {
+    if (_voipToken == null || _voipToken!.isEmpty) {
       debugPrint('⚠️ No VoIP token to register');
       return;
     }
@@ -285,7 +288,8 @@ class CallKitService {
         final token = event.body?['deviceTokenVoIP'] as String?;
         if (token != null) {
           _voipToken = token;
-          debugPrint('📲 VoIP token updated: ${token.substring(0, 20)}...');
+          final displayToken = token.length > 20 ? '${token.substring(0, 20)}...' : token;
+          debugPrint('📲 VoIP token updated: $displayToken');
         }
         break;
 

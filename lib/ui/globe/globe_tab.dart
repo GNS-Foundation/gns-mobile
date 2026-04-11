@@ -163,9 +163,8 @@ class _GlobeTabState extends State<GlobeTab> {
       ),
     );
 
-    if (result != null) {
-      _refresh();
-    }
+    // Always refresh after returning from compose screen
+    _refresh();
   }
 
   @override

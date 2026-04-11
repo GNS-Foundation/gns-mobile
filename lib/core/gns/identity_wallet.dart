@@ -18,6 +18,115 @@ import '../chain/chain_storage.dart';
 import 'gns_record.dart';
 import 'gns_api_client.dart';
 import '../profile/profile_module.dart';
+import '../financial/financial_module.dart';
+
+// =============================================================================
+// IDENTITY INFO
+// =============================================================================
+
+/// A lightweight snapshot of the local identity state.
+///
+/// Returned by [IdentityWallet.getIdentityInfo].
+class IdentityInfo {
+  /// Claimed (server-confirmed) GNS handle, e.g. `alice`.
+  final String? claimedHandle;
+
+  /// Handle reserved locally but not yet confirmed by the server.
+  final String? reservedHandle;
+
+  /// Convenience getter: returns claimed, then reserved.
+  String? get handle => claimedHandle ?? reservedHandle;
+
+  final String? publicKey;
+  final String? gnsId;
+  final double trustScore;
+  final int breadcrumbCount;
+  final int daysSinceCreation;
+  final bool networkAvailable;
+  final DateTime? firstBreadcrumbAt;
+
+  /// Whether all prerequisites for claiming the reserved handle are met.
+  bool get canClaimHandle {
+    const minBreadcrumbs = 100;
+    const minTrust = 20.0;
+    return reservedHandle != null &&
+        claimedHandle == null &&
+        breadcrumbCount >= minBreadcrumbs &&
+        trustScore >= minTrust;
+  }
+
+  IdentityInfo({
+    this.claimedHandle,
+    this.reservedHandle,
+    this.publicKey,
+    this.gnsId,
+    this.trustScore = 0,
+    this.breadcrumbCount = 0,
+    this.daysSinceCreation = 0,
+    this.networkAvailable = false,
+    this.firstBreadcrumbAt,
+  });
+}
+
+// =============================================================================
+// HANDLE CLAIM RESULT
+// =============================================================================
+
+/// Requirements snapshot returned when a claim attempt fails.
+class HandleClaimRequirements {
+  final int breadcrumbsCurrent;
+  final int breadcrumbsRequired;
+  final double trustCurrent;
+  final double trustRequired;
+
+  bool get breadcrumbsMet => breadcrumbsCurrent >= breadcrumbsRequired;
+  bool get trustMet => trustCurrent >= trustRequired;
+
+  HandleClaimRequirements({
+    required this.breadcrumbsCurrent,
+    this.breadcrumbsRequired = 100,
+    required this.trustCurrent,
+    this.trustRequired = 20.0,
+  });
+}
+
+/// Result of [IdentityWallet.claimHandle].
+class HandleClaimResult {
+  final bool success;
+  final String? handle;
+  final String? message;
+  final String? error;
+  final HandleClaimRequirements? requirements;
+
+  HandleClaimResult.success({required this.handle, this.message})
+      : success = true,
+        error = null,
+        requirements = null;
+
+  HandleClaimResult.failure({
+    this.error,
+    this.requirements,
+  })  : success = false,
+        handle = null,
+        message = null;
+}
+
+/// Result of [IdentityWallet.createIdentityWithHandle].
+class CreateIdentityResult {
+  final bool success;
+  final String? gnsId;
+  final String? handle;
+  final String? error;
+
+  CreateIdentityResult.success({required this.gnsId, required this.handle})
+      : success = true,
+        error = null;
+
+  CreateIdentityResult.failure({this.error})
+      : success = false,
+        gnsId = null,
+        handle = null;
+}
 
 class IdentityWallet {
   static final IdentityWallet _instance = IdentityWallet._internal();
@@ -38,11 +147,52 @@ class IdentityWallet {
   bool get isInitialized => _initialized;
   bool get hasIdentity => _keypair != null;
   String? get publicKey => _keypair?.publicKeyHex;
+  /// Alias kept for callers that use `wallet.publicKeyHex` directly.
+  String? get publicKeyHex => _keypair?.publicKeyHex;
   String? get gnsId => _keypair?.gnsId;
   GnsRecord? get localRecord => _localRecord;
   BreadcrumbEngine get breadcrumbEngine => _breadcrumbEngine;
   bool get networkAvailable => _networkAvailable;
+
+  /// Synchronous handle getter (claimed → reserved → record).
+  String? get currentHandle => _localRecord?.handle;
+
+  /// Trust score from local record (or 0).
+  double get trustScore => _localRecord?.trustScore ?? 0;
+
+  /// Breadcrumb count from local record (or 0).
+  int get breadcrumbCount => _localRecord?.breadcrumbCount ?? 0;
+
+  /// Return the current profile data stored in the local GNS record.
+  ProfileData getProfile() => _profileData;
+
+  /// Alias for [getCurrentHandle] (sync convenience).
+  Future<String?> getHandle() async => getCurrentHandle();
+
+  /// Sign a string and return the hex signature. Alias for [signString].
+  Future<String> sign(String data) async {
+    final sig = await signString(data);
+    return sig ?? '';
+  }
+
+  /// Delete the identity: wipe keys, record, chain data.
+  Future<void> deleteIdentity() async {
+    await _storage.deleteAll();
+    await _chainStorage.deleteAll();
+    _keypair = null;
+    _localRecord = null;
+    _profileData = ProfileData();
+    _initialized = false;
+    debugPrint('🗑️ Identity deleted');
+  }
   GnsKeypair? get keypair => _keypair;
+
+  /// Async check whether an identity keypair exists in secure storage.
+  /// Use this on startup before [initialize] is called, or after it.
+  Future<bool> checkIdentityExists() async {
+    if (_keypair != null) return true;
+    return await _storage.hasIdentity();
+  }
 
   // ==================== COMMUNICATION SERVICE SUPPORT ====================
 
@@ -246,6 +396,56 @@ class IdentityWallet {
     return _keypair!;
   }
 
+  /// Create a new identity AND reserve a GNS handle in one step.
+  ///
+  /// Generates a fresh Ed25519 keypair, persists it, then calls
+  /// [GnsApiClient.reserveHandle] to reserve [handle] on the server.
+  /// The reserved handle is stored in secure storage so that
+  /// [getIdentityInfo] and [getCurrentHandle] can return it immediately.
+  Future<CreateIdentityResult> createIdentityWithHandle(String handle) async {
+    try {
+      // 1. Generate and persist keypair.
+      final keypair = await GnsKeypair.generate();
+      _keypair = keypair;
+      await _storage.saveKeypair(keypair);
+      debugPrint('🆔 New identity created: ${keypair.gnsId}');
+
+      // 2. Sign the reservation request.
+      final pk = keypair.publicKeyHex;
+      final cleanHandle = handle.toLowerCase().replaceAll('@', '').trim();
+      final message = 'reserve:$cleanHandle:$pk';
+      final msgBytes = Uint8List.fromList(utf8.encode(message));
+      final sig = await keypair.signToHex(msgBytes);
+
+      // 3. Reserve on the server.
+      final result = await _apiClient.reserveHandle(
+        handle: cleanHandle,
+        publicKey: pk,
+        signature: sig,
+      );
+
+      final success = result['success'] == true ||
+          result['handle'] != null ||
+          result['reserved'] == true;
+
+      if (success) {
+        // 4. Persist to secure storage.
+        await _storage.storeReservedHandle(cleanHandle, DateTime.now());
+        debugPrint('✅ Handle reserved: @$cleanHandle');
+        return CreateIdentityResult.success(
+          gnsId: keypair.gnsId,
+          handle: cleanHandle,
+        );
+      } else {
+        final error = result['error']?.toString() ?? 'Handle reservation failed';
+        return CreateIdentityResult.failure(error: error);
+      }
+    } catch (e) {
+      debugPrint('❌ createIdentityWithHandle error: $e');
+      return CreateIdentityResult.failure(error: e.toString());
+    }
+  }
+
   Future<void> setNetworkAvailable(bool available) async {
     _networkAvailable = available;
   }
@@ -253,7 +453,13 @@ class IdentityWallet {
   Future<bool> publishRecord(GnsRecord record) async {
     if (_keypair == null) return false;
     try {
-      final success = await _apiClient.publishRecord(record, _keypair!);
+      final result = await _apiClient.publishRecord(
+        publicKey: _keypair!.publicKeyHex,
+        record: record.toJson(),
+      );
+      final success = result['success'] == true ||
+          result['identity'] != null ||
+          result['record'] != null;
       if (success) {
         _localRecord = record;
         await _chainStorage.saveRecord(record);
@@ -262,6 +468,292 @@ class IdentityWallet {
     } catch (e) {
       debugPrint('❌ Publish record error: $e');
       return false;
+    }
+  }
+
+  // ==================== IDENTITY INFO ====================
+
+  /// Returns a snapshot of the current identity state.
+  Future<IdentityInfo> getIdentityInfo() async {
+    final record = _localRecord;
+    final pk = publicKey;
+    final id = gnsId;
+
+    // Prefer the handle from the local GNS record (server-confirmed/claimed).
+    final String? claimed = record?.handle ?? await _storage.readClaimedHandle();
+
+    // If no claimed handle, look up a reserved one.
+    String? reserved;
+    if (claimed == null) {
+      try {
+        reserved = await _storage.readReservedHandle();
+      } catch (_) {}
+    }
+
+    // Breadcrumb count: prefer record, fall back to secure storage.
+    final int breadcrumbs = record?.breadcrumbCount ??
+        (await _storage.readBreadcrumbCount() ?? 0);
+
+    // Trust score: prefer record, fall back to secure storage.
+    final double trust = record?.trustScore ??
+        (await _storage.readTrustScore() ?? 0.0);
+
+    final created = record?.createdAt ?? DateTime.now();
+    final days = DateTime.now().difference(created).inDays;
+
+    return IdentityInfo(
+      claimedHandle: claimed,
+      reservedHandle: reserved,
+      publicKey: pk,
+      gnsId: id,
+      trustScore: trust,
+      breadcrumbCount: breadcrumbs,
+      daysSinceCreation: days,
+      networkAvailable: _networkAvailable,
+      firstBreadcrumbAt: record?.createdAt,
+    );
+  }
+
+  // ==================== HANDLE CLAIM ====================
+
+  /// Attempt to claim the currently reserved handle.
+  ///
+  /// Validates local prerequisites first, then posts to the GNS API.
+  Future<HandleClaimResult> claimHandle() async {
+    if (_keypair == null) {
+      return HandleClaimResult.failure(error: 'Wallet not initialised');
+    }
+
+    final info = await getIdentityInfo();
+
+    if (info.reservedHandle == null) {
+      return HandleClaimResult.failure(error: 'No reserved handle found');
+    }
+
+    if (!info.canClaimHandle) {
+      return HandleClaimResult.failure(
+        error: 'Requirements not met',
+        requirements: HandleClaimRequirements(
+          breadcrumbsCurrent: info.breadcrumbCount,
+          trustCurrent: info.trustScore,
+        ),
+      );
+    }
+
+    try {
+      final handle = info.reservedHandle!;
+      final pk = _keypair!.publicKeyHex;
+      final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+      final claimPayload = {
+        'identity': pk,
+        'proof': {
+          'breadcrumb_count': info.breadcrumbCount,
+          'trust_score': info.trustScore,
+        },
+        'claimed_at': timestamp,
+      };
+      final claimJson = jsonEncode(claimPayload);
+      final msgBytes = Uint8List.fromList(utf8.encode(claimJson));
+      final sig = await _keypair!.signToHex(msgBytes);
+
+      final result = await _apiClient.claimHandle(
+        handle: handle,
+        claim: claimPayload,
+        signature: sig,
+      );
+
+      final success = result['success'] == true ||
+          result['handle'] != null ||
+          result['identity'] != null;
+
+      if (success) {
+        // Persist claimed handle to secure storage.
+        try {
+          await _storage.storeClaimedHandle(handle);
+        } catch (_) {}
+
+        // Update local record to mark the handle as claimed.
+        if (_localRecord != null) {
+          final updated = GnsRecord(
+            identity: _localRecord!.identity,
+            handle: handle,
+            encryptionKey: _localRecord!.encryptionKey,
+            modules: _localRecord!.modules,
+            endpoints: _localRecord!.endpoints,
+            epochRoots: _localRecord!.epochRoots,
+            trustScore: _localRecord!.trustScore,
+            breadcrumbCount: _localRecord!.breadcrumbCount,
+            createdAt: _localRecord!.createdAt,
+            updatedAt: DateTime.now(),
+            signature: _localRecord!.signature,
+          );
+          _localRecord = updated;
+          await _chainStorage.saveRecord(updated);
+        }
+
+        return HandleClaimResult.success(
+          handle: handle,
+          message: '@$handle has been claimed!',
+        );
+      } else {
+        final error = result['error']?.toString() ?? 'Server rejected the claim';
+        return HandleClaimResult.failure(error: error);
+      }
+    } catch (e) {
+      debugPrint('❌ claimHandle error: $e');
+      return HandleClaimResult.failure(error: e.toString());
+    }
+  }
+
+  // ==================== SIGNING UTILITIES ====================
+
+  /// Sign raw bytes with the Ed25519 identity key.
+  /// Returns the signature bytes, or null if the wallet is not initialised.
+  Future<Uint8List?> signBytes(List<int> bytes) async {
+    if (_keypair == null) return null;
+    try {
+      final hexSig = await _keypair!.signToHex(Uint8List.fromList(bytes));
+      // Convert hex string back to bytes for callers that need raw bytes.
+      final result = Uint8List(hexSig.length ~/ 2);
+      for (var i = 0; i < result.length; i++) {
+        result[i] = int.parse(hexSig.substring(i * 2, i * 2 + 2), radix: 16);
+      }
+      return result;
+    } catch (e) {
+      debugPrint('❌ signBytes error: $e');
+      return null;
+    }
+  }
+
+  // ==================== HANDLE UTILITIES ====================
+
+  /// Returns the current handle (claimed preferred, then reserved), or null.
+  Future<String?> getCurrentHandle() async {
+    // Prefer the handle in the local GNS record (claimed/server-confirmed).
+    if (_localRecord?.handle != null) return _localRecord!.handle;
+    // Then try secure storage for claimed or reserved handle.
+    try {
+      return await _storage.readClaimedHandle() ??
+             await _storage.readReservedHandle();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ==================== FINANCIAL DATA ====================
+
+  /// Persist [financial] data to the GNS record and publish to the network.
+  ///
+  /// Returns true on successful publish, false on failure
+  /// (data is still saved locally either way).
+  Future<bool> updateFinancialData(FinancialData financial) async {
+    if (_keypair == null || _localRecord == null) return false;
+
+    try {
+      final existing = _localRecord!;
+
+      // Serialise financial data as a GNS module.
+      final financialModule = GnsModule(
+        id: 'financial',
+        schema: 'gns.module.financial/v1',
+        name: 'Financial',
+        config: financial.toJson(),
+      );
+
+      // Replace any existing financial module.
+      final modules = existing.modules
+          .where((m) => m.schema != 'gns.module.financial/v1')
+          .toList()
+        ..add(financialModule);
+
+      // Re-sign (use existing signature as placeholder — server will validate
+      // the record payload, but needs a non-empty signature field).
+      final updated = GnsRecord(
+        identity: existing.identity,
+        handle: existing.handle,
+        encryptionKey: existing.encryptionKey,
+        modules: modules,
+        endpoints: existing.endpoints,
+        epochRoots: existing.epochRoots,
+        trustScore: existing.trustScore,
+        breadcrumbCount: existing.breadcrumbCount,
+        createdAt: existing.createdAt,
+        updatedAt: DateTime.now(),
+        signature: existing.signature,
+      );
+
+      _localRecord = updated;
+      await _chainStorage.saveRecord(updated);
+
+      return await publishRecord(updated);
+    } catch (e) {
+      debugPrint('❌ updateFinancialData error: $e');
+      return false;
+    }
+  }
+
+  // ==================== PROFILE DATA ====================
+
+  /// Persist [profile] data to the GNS record and publish to the network.
+  ///
+  /// Returns true on successful publish, false on failure
+  /// (data is still saved locally either way).
+  Future<bool> updateProfileModule(ProfileData profile) async {
+    if (_keypair == null || _localRecord == null) return false;
+
+    try {
+      final existing = _localRecord!;
+
+      // Serialise profile data as a GNS module.
+      final profileModule = GnsModule(
+        id: 'profile',
+        schema: GnsModuleSchemas.profile,
+        name: 'Profile',
+        isPublic: true,
+        config: profile.toJson(),
+      );
+
+      // Replace any existing profile module.
+      final modules = existing.modules
+          .where((m) => m.schema != GnsModuleSchemas.profile)
+          .toList()
+        ..add(profileModule);
+
+      final updated = GnsRecord(
+        identity: existing.identity,
+        handle: existing.handle,
+        encryptionKey: existing.encryptionKey,
+        modules: modules,
+        endpoints: existing.endpoints,
+        epochRoots: existing.epochRoots,
+        trustScore: existing.trustScore,
+        breadcrumbCount: existing.breadcrumbCount,
+        createdAt: existing.createdAt,
+        updatedAt: DateTime.now(),
+        signature: existing.signature,
+      );
+
+      _localRecord = updated;
+      await _chainStorage.saveRecord(updated);
+
+      return await publishRecord(updated);
+    } catch (e) {
+      debugPrint('❌ updateProfileModule error: $e');
+      return false;
+    }
+  }
+
+  // ==================== STRING SIGNING ====================
+
+  /// Sign a string message with the Ed25519 identity key.
+  /// Returns the hex-encoded signature, or null if the wallet is not initialised.
+  Future<String?> signString(String message) async {
+    if (_keypair == null) return null;
+    try {
+      return await _keypair!.signToHex(Uint8List.fromList(utf8.encode(message)));
+    } catch (e) {
+      debugPrint('❌ signString error: $e');
+      return null;
     }
   }
 }

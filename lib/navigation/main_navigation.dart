@@ -1,10 +1,7 @@
-/// Main Navigation Screen — Tier-Based Dynamic Navigation
-///
-/// Tabs unlock progressively as user collects breadcrumbs:
-///   🌱 Seedling  (0+)    → Home | Journey | Settings
-///   🌿 Explorer  (10+)   → same + handle features
-///   🧭 Navigator (100+)  → + Messages | Contacts
-///   🏔️ Trailblazer (250+)→ + History (payments via Home)
+/// Main Navigation Screen — Trajectory Map Edition
+/// 
+/// 4-tab navigation: Map | Badges | Digest | Profile
+/// Map is the home screen. Protocol features live in Profile > Advanced.
 ///
 /// Location: lib/navigation/main_navigation.dart
 
@@ -13,14 +10,12 @@ import 'package:flutter/material.dart';
 import '../core/gns/identity_wallet.dart';
 import '../core/profile/profile_service.dart';
 import '../core/financial/payment_service.dart';
-import '../core/tier/tier_gate.dart';
 import '../core/theme/theme_service.dart';
-import '../ui/home/home_tab.dart';
-import '../ui/journey/journey_tab.dart';
-import '../ui/contacts/contacts_tab.dart';
-import '../ui/settings/settings_tab.dart';
-import '../ui/screens/history_screen.dart';
-import '../ui/messages/thread_list_screen.dart';
+import '../ui/trajectory/trajectory_map_tab.dart';
+import '../ui/trajectory/badges_tab.dart';
+import '../ui/trajectory/digest_tab.dart';
+import '../ui/trajectory/profile_tab.dart';
+import '../ui/messages/unified_inbox_screen.dart';
 import '../ui/financial/payment_received_sheet.dart';
 
 class MainNavigationScreen extends StatefulWidget {
@@ -43,199 +38,114 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   PaymentService? _paymentService;
   StreamSubscription? _incomingPaymentSub;
-  final _tierGate = TierGate();
-  GnsTier? _lastCelebratedTier;
 
   @override
   void initState() {
     super.initState();
-    _tierGate.addListener(_onTierChanged);
     _initPayments();
   }
 
   @override
   void dispose() {
     _incomingPaymentSub?.cancel();
-    _tierGate.removeListener(_onTierChanged);
     super.dispose();
   }
-
-  // ─── Tier ────────────────────────────────────────────────────────────────
-
-  void _onTierChanged() {
-    if (!mounted) return;
-    final tabs = _buildTabs();
-    final safeIndex = _currentIndex.clamp(0, tabs.length - 1);
-    setState(() => _currentIndex = safeIndex);
-    _maybeCelebrateTierUp();
-  }
-
-  GnsTier get _tier => _tierGate.currentTier;
-
-  // ─── Payments ────────────────────────────────────────────────────────────
 
   Future<void> _initPayments() async {
     try {
       _paymentService = PaymentService.instance(widget.wallet);
       await _paymentService!.initialize();
       _paymentService!.startPolling();
+      
+      // Listen for incoming payments globally
       _incomingPaymentSub = _paymentService!.incomingPayments.listen((incoming) {
-        PaymentReceivedSheet.show(
-          context,
-          incomingPayment: incoming,
-          paymentService: _paymentService!,
-        );
+        _showIncomingPayment(incoming);
       });
     } catch (e) {
       debugPrint('Payment init error: $e');
     }
   }
 
-  // ─── Tab Definitions ─────────────────────────────────────────────────────
-
-  List<_TabItem> _buildTabs() {
-    return [
-      _TabItem(
-        icon: Icons.home_outlined,
-        activeIcon: Icons.home,
-        label: 'Home',
-        body: HomeTab(
-          wallet: widget.wallet,
-          profileService: widget.profileService,
-        ),
-      ),
-
-      if (_tier.canSendMessages)
-        _TabItem(
-          icon: Icons.chat_bubble_outline,
-          activeIcon: Icons.chat_bubble,
-          label: 'Messages',
-          body: const ThreadListScreen(),
-        ),
-
-      if (_tier.canViewContacts)
-        _TabItem(
-          icon: Icons.people_outline,
-          activeIcon: Icons.people,
-          label: 'Contacts',
-          body: ContactsTab(profileService: widget.profileService),
-        ),
-
-      if (_tier.canViewHistory)
-        _TabItem(
-          icon: Icons.history_outlined,
-          activeIcon: Icons.history,
-          label: 'History',
-          body: HistoryScreen(
-            wallet: widget.wallet,
-            paymentService: _paymentService,
-          ),
-        ),
-
-      _TabItem(
-        icon: Icons.explore_outlined,
-        activeIcon: Icons.explore,
-        label: _tier.displayName,
-        body: JourneyTab(wallet: widget.wallet),
-      ),
-
-      _TabItem(
-        icon: Icons.settings_outlined,
-        activeIcon: Icons.settings,
-        label: 'Settings',
-        body: SettingsTab(
-          wallet: widget.wallet,
-          onIdentityDeleted: widget.onIdentityDeleted,
-        ),
-      ),
-    ];
-  }
-
-  // ─── Build ───────────────────────────────────────────────────────────────
-
-  @override
-  Widget build(BuildContext context) {
-    final tabs = _buildTabs();
-    return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: tabs.map((t) => t.body).toList(),
-      ),
-      bottomNavigationBar: _buildBottomNav(tabs),
+  void _showIncomingPayment(IncomingPayment incoming) {
+    PaymentReceivedSheet.show(
+      context,
+      incomingPayment: incoming,
+      paymentService: _paymentService!,
     );
   }
 
-  Widget _buildBottomNav(List<_TabItem> tabs) {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(
+        index: _currentIndex,
+        children: [
+          // Tab 0: Map (home)
+          TrajectoryMapTab(wallet: widget.wallet),
+
+          // Tab 1: Chat
+          const UnifiedInboxScreen(),
+
+          // Tab 2: Badges
+          const BadgesTab(),
+
+          // Tab 3: Digest
+          const DigestTab(),
+
+          // Tab 4: Profile (absorbs identity, settings, wallet, advanced)
+          ProfileTab(
+            wallet: widget.wallet,
+            profileService: widget.profileService,
+            paymentService: _paymentService,
+            onIdentityDeleted: widget.onIdentityDeleted,
+          ),
+        ],
+      ),
+      bottomNavigationBar: _buildBottomNav(),
+    );
+  }
+
+  Widget _buildBottomNav() {
     return Container(
       decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: AppTheme.border(context), width: 1)),
+        border: Border(
+          top: BorderSide(color: AppTheme.border(context), width: 1),
+        ),
       ),
       child: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
         type: BottomNavigationBarType.fixed,
-        selectedItemColor: _tier.color,
-        items: tabs.map((t) => BottomNavigationBarItem(
-          icon: Icon(t.icon),
-          activeIcon: Icon(t.activeIcon),
-          label: t.label,
-        )).toList(),
+        selectedFontSize: 11,
+        unselectedFontSize: 11,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.map_outlined),
+            activeIcon: Icon(Icons.map),
+            label: 'Map',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.chat_bubble_outline),
+            activeIcon: Icon(Icons.chat_bubble),
+            label: 'Chat',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.emoji_events_outlined),
+            activeIcon: Icon(Icons.emoji_events),
+            label: 'Badges',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.auto_stories_outlined),
+            activeIcon: Icon(Icons.auto_stories),
+            label: 'Digest',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person_outline),
+            activeIcon: Icon(Icons.person),
+            label: 'Profile',
+          ),
+        ],
       ),
     );
   }
-
-  // ─── Tier-Up Celebration ─────────────────────────────────────────────────
-
-  void _maybeCelebrateTierUp() {
-    if (_lastCelebratedTier == null) {
-      _lastCelebratedTier = _tier;
-      return;
-    }
-    if (_tier.level > _lastCelebratedTier!.level) {
-      _lastCelebratedTier = _tier;
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              Text(_tier.emoji, style: const TextStyle(fontSize: 24)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('${_tier.displayName} unlocked!',
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    Text(_tier.description,
-                        style: const TextStyle(fontSize: 12)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: _tier.color,
-          duration: const Duration(seconds: 4),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
-    }
-  }
-}
-
-// ─── Internal Tab Model ──────────────────────────────────────────────────────
-
-class _TabItem {
-  final IconData icon;
-  final IconData activeIcon;
-  final String label;
-  final Widget body;
-
-  const _TabItem({
-    required this.icon,
-    required this.activeIcon,
-    required this.label,
-    required this.body,
-  });
 }

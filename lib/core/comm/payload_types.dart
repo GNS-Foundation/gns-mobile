@@ -198,17 +198,49 @@ class HiveProof {
   final String cell;
   final String model;
   final String worker;
+  final int? tokensIn;
+  final int? tokensOut;
+  final int? latencyMs;
+  final double? costGns;
+  final String? jobHash;
 
-  HiveProof({required this.epoch, required this.cell, required this.model, required this.worker});
+  HiveProof({
+    required this.epoch,
+    required this.cell,
+    required this.model,
+    required this.worker,
+    this.tokensIn,
+    this.tokensOut,
+    this.latencyMs,
+    this.costGns,
+    this.jobHash,
+  });
 
   factory HiveProof.fromJson(Map<String, dynamic> json) => HiveProof(
     epoch: json["epoch"] as int,
     cell: json["cell"] as String,
     model: json["model"] as String,
     worker: json["worker"] as String,
+    tokensIn: json["tokensIn"] as int?,
+    tokensOut: json["tokensOut"] as int?,
+    latencyMs: json["latencyMs"] as int?,
+    costGns: (json["costGns"] as num?)?.toDouble(),
+    jobHash: json["jobHash"] as String?,
   );
 
-  Map<String, dynamic> toJson() => {"epoch": epoch, "cell": cell, "model": model, "worker": worker};
+  Map<String, dynamic> toJson() => {
+    "epoch": epoch,
+    "cell": cell,
+    "model": model,
+    "worker": worker,
+    if (tokensIn != null) "tokensIn": tokensIn,
+    if (tokensOut != null) "tokensOut": tokensOut,
+    if (latencyMs != null) "latencyMs": latencyMs,
+    if (costGns != null) "costGns": costGns,
+    if (jobHash != null) "jobHash": jobHash,
+  };
+
+  @override String toString() => "HiveProof(epoch:$epoch, cell:$cell, model:$model)";
 }
 
 /// Simple text message

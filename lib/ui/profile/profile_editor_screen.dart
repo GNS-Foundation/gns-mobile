@@ -6,6 +6,7 @@
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../screens/facet_list_screen.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../core/gns/identity_wallet.dart';
 import '../../core/profile/profile_service.dart';
@@ -151,6 +152,20 @@ class _ProfileEditorScreenState extends State<ProfileEditorScreen> {
               onPressed: () => setState(() => _links.removeAt(entry.key)),
             ),
           )),
+          const Text('Facets', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.layers_outlined),
+              title: const Text('Manage facets'),
+              subtitle: const Text('Role profiles others can see'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FacetListScreen()),
+              ),
+            ),
+          ),
           const SizedBox(height: 24),
           const Text('Privacy', style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),

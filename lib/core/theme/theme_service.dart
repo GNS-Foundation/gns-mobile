@@ -104,7 +104,7 @@ class AppTheme {
       centerTitle: true,
       foregroundColor: darkTextPrimary,
     ),
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: darkSurface,
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -159,7 +159,7 @@ class AppTheme {
       }),
     ),
     dividerTheme: const DividerThemeData(color: darkBorder),
-    dialogTheme: DialogTheme(
+    dialogTheme: DialogThemeData(
       backgroundColor: darkSurface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),
@@ -199,7 +199,7 @@ class AppTheme {
       foregroundColor: lightTextPrimary,
       iconTheme: IconThemeData(color: lightTextPrimary),
     ),
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: lightSurface,
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -254,7 +254,7 @@ class AppTheme {
       }),
     ),
     dividerTheme: const DividerThemeData(color: lightBorder),
-    dialogTheme: DialogTheme(
+    dialogTheme: DialogThemeData(
       backgroundColor: lightSurface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),

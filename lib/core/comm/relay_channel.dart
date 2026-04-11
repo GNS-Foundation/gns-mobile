@@ -144,6 +144,7 @@ class RelayChannel implements CommunicationChannel {
   final _stateController = StreamController<ChannelState>.broadcast();
   final _envelopeController = StreamController<GnsEnvelope>.broadcast();
   final _callSignalController = StreamController<Map<String, dynamic>>.broadcast();
+  final _browserMessageController = StreamController<Map<String, dynamic>>.broadcast();
 
   RelayChannel({
     required this.config,
@@ -184,6 +185,8 @@ class RelayChannel implements CommunicationChannel {
   
   /// Stream of incoming call signals (call_offer, call_answer, etc.)
   Stream<Map<String, dynamic>> get callSignalStream => _callSignalController.stream;
+  
+  Stream<Map<String, dynamic>> get browserMessages => _browserMessageController.stream;
   
   /// Send a raw JSON string over WebSocket (used by CallService for signaling)
   void sendRaw(String jsonMessage) {
@@ -234,7 +237,7 @@ class RelayChannel implements CommunicationChannel {
       final auth = await authProvider();
       
       final wsUrl = '${config.wsUrl}'
-          '?pubkey=${auth.publicKey}'
+          '?pubkey=${auth.publicKey}&device=mobile'
           '&timestamp=${auth.timestamp}'
           '&sig=${Uri.encodeComponent(auth.signature)}';
       
@@ -384,7 +387,7 @@ class RelayChannel implements CommunicationChannel {
       };
 
       // ✅ FIX: Use full URL
-      final url = '${config.baseUrl}/messages/read';
+      final url = '${config.baseUrl}/messages/ack';
       debugPrint('🔍 READ → POST $url');
       debugPrint('🔍 READ body: ${jsonEncode(payload)}');
 
@@ -513,19 +516,10 @@ class RelayChannel implements CommunicationChannel {
   }
 
   /// Update presence status
-  /// ✅ FIXED: Use full URL
   Future<void> _updatePresence(String status) async {
-    try {
-      final auth = await authProvider();
-      final url = '${config.baseUrl}/messages/presence';
-      await _dio.post(
-        url,
-        data: {'status': status},
-        options: Options(headers: auth.headers),
-      );
-    } catch (e) {
-      debugPrint('Error updating presence: $e');
-    }
+    // The Railway backend Phase C uses WebSocket connection state for presence.
+    // Explicit HTTP requests to /messages/presence are deprecated and return 400.
+    debugPrint('Presence is now managed automatically by the server WebSocket.');
   }
 
   void _handleWebSocketMessage(dynamic data) {
@@ -540,12 +534,36 @@ class RelayChannel implements CommunicationChannel {
           );
           _envelopeController.add(envelope);
           break;
+
+        case 'new_message':
+          final newMsgData = json['data'] as Map<String, dynamic>?;
+          if (newMsgData != null) {
+            final newEnvelope = GnsEnvelope.fromJson(newMsgData);
+            _envelopeController.add(newEnvelope);
+          }
+          break;
           
         case 'connected':
           debugPrint('WebSocket confirmed connected');
           break;
           
         case 'pong':
+          break;
+          
+        case 'message_synced':
+          // Browser confirmed it received our sync — no action needed on mobile
+          debugPrint('🌐 Browser sync confirmed: ${json['messageId']}');
+          break;
+
+        case 'new_message_from_browser':
+          // Panthera sent a message — trigger sync to fetch it
+          debugPrint('🌐 Browser sent a message, triggering sync...');
+          _browserMessageController.add(json);
+          break;
+
+        case 'sync_request':
+          // Browser asking for message history — handle if needed in future
+          debugPrint('🌐 Browser requested sync');
           break;
           
         case 'error':
@@ -613,6 +631,7 @@ class RelayChannel implements CommunicationChannel {
     await _stateController.close();
     await _envelopeController.close();
     await _callSignalController.close();
+    await _browserMessageController.close();
   }
 }
 

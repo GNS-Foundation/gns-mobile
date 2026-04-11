@@ -19,6 +19,11 @@ import '../../core/theme/theme_service.dart';
 import '../widgets/identity_card.dart';
 import '../screens/handle_management_screen.dart';
 import '../screens/browser_pairing_screen.dart';
+import '../../core/gep/gep_address.dart';
+import '../../core/privacy/h3_quantizer.dart';
+import '../../core/chain/chain_storage.dart';
+import '../../core/hive/hive_worker_service.dart';
+import '../hive/hive_worker_screen.dart';
 
 // ==================== HOME TAB ====================
 
@@ -38,6 +43,7 @@ class HomeTab extends StatefulWidget {
 
 class _HomeTabState extends State<HomeTab> {
   IdentityViewData? _myIdentity;
+  GepAddress? _myGepAddress;
   bool _isLoading = true;
   final _tierGate = TierGate();
 
@@ -53,6 +59,26 @@ class _HomeTabState extends State<HomeTab> {
 
   Future<void> _loadData() async {
     final identity = await widget.profileService.getMyIdentity();
+
+    // Compute GEP address from latest breadcrumb
+    try {
+      final latestBlock = await ChainStorage().getLatestBlock();
+      if (latestBlock != null) {
+        // Get centroid of the breadcrumb's H3 cell
+        final quantizer = H3Quantizer();
+        final coord = quantizer.h3HexToLatLon(latestBlock.locationCell);
+        _myGepAddress = GepAddress.fromLatLon(
+          coord.lat,
+          coord.lon,
+          resolution: GepAddress.defaultResolution,
+        );
+      } else {
+        _myGepAddress = null;
+      }
+    } catch (e) {
+      debugPrint('GEP address computation failed: $e');
+    }
+
     if (mounted) {
       setState(() {
         _myIdentity = identity;
@@ -85,7 +111,10 @@ class _HomeTabState extends State<HomeTab> {
                   
                   // ==================== IDENTITY CARD ====================
                   if (_myIdentity != null)
-                    IdentityCard(identity: _myIdentity!),
+                    IdentityCard(
+                      identity: _myIdentity!,
+                      gepAddress: _myGepAddress,
+                    ),
                   const SizedBox(height: 20),
                   
                   // ==================== HANDLE STATUS ====================
@@ -94,6 +123,10 @@ class _HomeTabState extends State<HomeTab> {
                   
                   // ==================== BREADCRUMB STATUS ====================
                   _buildBreadcrumbStatus(isDark, tierColor),
+                  const SizedBox(height: 16),
+                  
+                  // ==================== HIVE STATUS ====================
+                  _buildHiveStatusCard(isDark),
                   const SizedBox(height: 16),
                   
                   // ==================== EXTENSION PAIRING ====================
@@ -323,61 +356,160 @@ class _HomeTabState extends State<HomeTab> {
 
   // ==================== EXTENSION PAIRING ====================
 
-  Widget _buildExtensionPairingCard(bool isDark) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            const Color(0xFF1A3C5E).withOpacity(isDark ? 0.4 : 0.08),
-            const Color(0xFF1A3C5E).withOpacity(isDark ? 0.2 : 0.03),
+  // ==================== HIVE STATUS CARD ====================
+
+  Widget _buildHiveStatusCard(bool isDark) {
+    final service = HiveWorkerService();
+    final status = service.status;
+    final isRunning = status.running;
+    const cyan = Color(0xFF0099CC);
+    const green = Color(0xFF00C853);
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => HiveWorkerScreen(wallet: widget.wallet),
+          ),
+        );
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? [const Color(0xFF0C1A2E), const Color(0xFF061219)]
+                : [const Color(0xFFE8F5FD), const Color(0xFFE8F8EE)],
+          ),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isRunning
+                ? green.withOpacity(0.4)
+                : cyan.withOpacity(0.2),
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: cyan.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Center(
+                child: Text('⬡', style: TextStyle(fontSize: 20)),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'GEIANT Hive',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.2,
+                      color: cyan,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    isRunning
+                        ? '${status.tokensEarned.toStringAsFixed(4)} GNS earned · ${status.jobsRelayed} jobs relayed'
+                        : 'Earn GNS by contributing compute',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: isRunning
+                    ? green.withOpacity(0.15)
+                    : cyan.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                isRunning ? 'ACTIVE' : 'TAP',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1,
+                  color: isRunning ? green : cyan,
+                ),
+              ),
+            ),
           ],
         ),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF1A3C5E).withOpacity(0.2)),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 44, height: 44,
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A3C5E).withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
+    );
+  }
+
+  Widget _buildExtensionPairingCard(bool isDark) {
+    const cyan = Color(0xFF0099CC);
+    return GestureDetector(
+      onTap: () => Navigator.push(context,
+        MaterialPageRoute(builder: (_) => BrowserPairingScreen(wallet: widget.wallet)),
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              cyan.withOpacity(isDark ? 0.12 : 0.07),
+              cyan.withOpacity(isDark ? 0.05 : 0.02),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: cyan.withOpacity(0.25)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44, height: 44,
+              decoration: BoxDecoration(
+                color: cyan.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.qr_code_scanner, color: cyan, size: 22),
             ),
-            child: const Icon(Icons.extension, color: Color(0xFF1A3C5E), size: 22),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'GNS Vault Extension',
-                  style: TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w700,
-                    color: isDark ? Colors.white : Colors.black87,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Browser Pairing',
+                    style: TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Pair with Chrome to verify sites and auto-fill',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isDark ? Colors.white38 : Colors.black38,
+                  const SizedBox(height: 2),
+                  Text(
+                    'Scan QR to link your identity to Panthera or Chrome',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? Colors.white38 : Colors.black45,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            onPressed: () {
-              Navigator.push(context,
-                MaterialPageRoute(builder: (_) => BrowserPairingScreen(wallet: widget.wallet)),
-              );
-            },
-            icon: const Icon(Icons.qr_code, color: Color(0xFF1A3C5E)),
-          ),
-        ],
+            const Icon(Icons.chevron_right, color: cyan, size: 20),
+          ],
+        ),
       ),
     );
   }

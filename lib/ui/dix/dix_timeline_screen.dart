@@ -108,7 +108,7 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
       ),
     );
     
-    // Refresh the feed after posting
+    // Always refresh the feed after returning from compose
     await _loadPosts();
     
     // Show success
@@ -382,7 +382,7 @@ class _DixTimelineScreenState extends State<DixTimelineScreen> {
                   builder: (_) => DixComposeScreen(replyToId: post.id),
                   fullscreenDialog: true,
                 ),
-              );
+              ).then((_) => _loadPosts());
             },
             onLike: () {
               // TODO: Like post

@@ -125,6 +125,45 @@ class CommunicationService {
       final type = json['type'] as String;
       CallService().handleCallSignal(type, json);
     });
+
+    _relayChannel.browserMessages.listen((event) async {
+      try {
+        debugPrint('🌐 Browser message event: ${event['type']}');
+        final text = event['decryptedText'] as String? ?? '';
+        final conversationWith = event['conversationWith'] as String? ?? '';
+        final messageId = event['messageId'] as String? ?? '';
+        final timestamp = event['timestamp'] as int? ??
+            DateTime.now().millisecondsSinceEpoch;
+
+        if (text.isEmpty || conversationWith.isEmpty) return;
+
+        final thread = await _storage.getOrCreateDirectThread(
+          myPublicKey: _wallet.publicKey!,
+          otherPublicKey: conversationWith,
+        );
+
+        final message = GnsMessage(
+          id: messageId.isNotEmpty ? messageId :
+              DateTime.now().millisecondsSinceEpoch.toString(),
+          threadId: thread.id,
+          fromPublicKey: _wallet.publicKey!,
+          payloadType: PayloadType.textPlain,
+          payload: TextPayload.plain(text),
+          timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp),
+          status: MessageStatus.sent,
+          isOutgoing: true,
+        );
+
+        final existing = await _storage.getMessage(message.id);
+        if (existing != null) return;
+
+        await _storage.saveMessage(message);
+        _messageController.add(message);
+        debugPrint('🌐 Browser message saved: ${message.id.substring(0, 8)}...');
+      } catch (e) {
+        debugPrint('⚠️ Browser message save failed: $e');
+      }
+    });
   }
 
   /// Get or create singleton instance
@@ -349,6 +388,7 @@ class CommunicationService {
       );
       
       await _storage.saveMessage(message);
+      _syncMessageToBrowser(message: message, otherPublicKey: toPublicKey, direction: 'outgoing');
       
       // Update status to sent after successful delivery
       await _storage.updateMessageStatus(message.id, MessageStatus.sent);
@@ -421,6 +461,7 @@ class CommunicationService {
       );
       
       await _storage.saveMessage(message);
+      _syncMessageToBrowser(message: message, otherPublicKey: toPublicKey, direction: 'outgoing');
       return SendResult.success(message.id, message: message);
     } catch (e) {
       return SendResult.failure(e.toString());
@@ -524,23 +565,27 @@ class CommunicationService {
   /// Handle incoming envelope from RelayChannel
   /// Process incoming envelope and return message (or null if failed)
   /// ⚠️ Does NOT save to database - caller must use saveMessagesBatch()
-  Future<GnsMessage?> _handleIncomingEnvelope(GnsEnvelope envelope) async {
+  Future<GnsMessage?> _handleIncomingEnvelope(GnsEnvelope envelope, {bool skipSignature = false}) async {
     try {
       debugPrint('📨 Processing envelope from ${envelope.fromPublicKey.substring(0, 8)}...');
       debugPrint('   📧 PayloadType: ${envelope.payloadType}');
       debugPrint('   📧 isEmail: ${envelope.payloadType == PayloadType.email}');
       debugPrint('   📧 fromGateway: ${envelope.fromPublicKey.toLowerCase() == '007dd9b2c19308dd0e2dfc044da05a522a1d1adbd6f1c84147cc4e0b7a4bd53d'}');
       
-      // Verify signature first
-      final senderPubKeyBytes = _hexToBytes(envelope.fromPublicKey);
-      final isValid = await _crypto.verifyEnvelope(
-        envelope: envelope,
-        senderPublicKey: senderPubKeyBytes,
-      );
-      
-      if (!isValid) {
-        debugPrint('⚠️ Invalid signature on envelope');
-        return null;
+      // Verify signature first (unless skipped for browser syncs)
+      if (!skipSignature) {
+        final senderPubKeyBytes = _hexToBytes(envelope.fromPublicKey);
+        final isValid = await _crypto.verifyEnvelope(
+          envelope: envelope,
+          senderPublicKey: senderPubKeyBytes,
+        );
+        
+        if (!isValid) {
+          debugPrint('⚠️ Invalid signature on envelope');
+          return null;
+        }
+      } else {
+        debugPrint('⏭️ Skipping signature validation (browser sync)');
       }
       
       // Decrypt payload (using X25519 encryption keys!)
@@ -615,6 +660,17 @@ class CommunicationService {
       );
       
       debugPrint('✅ Message validated: ${message.id}');
+
+      // ✅ Sync decrypted message to Panthera browser via WebSocket
+      // Backend 'sync_to_browser' handler forwards to any connected browser
+      // with the same identity, so Panthera shows messages in real time
+      _syncMessageToBrowser(
+        message: message,
+        otherPublicKey: envelope.fromPublicKey,
+        otherHandle: envelope.fromHandle,
+        direction: 'incoming',
+      );
+
       return message;
     } catch (e) {
       debugPrint('❌ Error handling envelope: $e');
@@ -977,6 +1033,34 @@ class CommunicationService {
     await _relayChannel.dispose();
     await _messageController.close();
     await _typingController.close();
+  }
+
+  /// Sync a decrypted message to any paired Panthera browser.
+  /// The backend forwards it via WebSocket as 'message_synced'.
+  void _syncMessageToBrowser({
+    required GnsMessage message,
+    required String otherPublicKey,
+    String? otherHandle,
+    String direction = 'incoming',
+  }) {
+    try {
+      final text = message.textContent ?? '';
+      if (text.isEmpty) return; // only sync text messages for now
+
+      _relayChannel.sendRaw(jsonEncode({
+        'type': 'sync_to_browser',
+        'messageId': message.id,
+        'conversationWith': otherPublicKey,
+        'decryptedText': text,
+        'direction': direction,
+        'timestamp': message.timestamp.millisecondsSinceEpoch,
+        'fromHandle': otherHandle ?? '',
+      }));
+
+      debugPrint('🌐 Synced to browser: ${message.id.substring(0, 8)}...');
+    } catch (e) {
+      debugPrint('⚠️ Browser sync failed (non-critical): $e');
+    }
   }
 }
 

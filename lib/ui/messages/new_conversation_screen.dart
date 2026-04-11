@@ -489,10 +489,10 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
           // Suggest @echo
           ElevatedButton.icon(
             onPressed: () {
-              _searchController.text = 'echo';
+              _searchController.text = 'hai';
             },
             icon: const Icon(Icons.smart_toy),
-            label: const Text('Message @echo bot'),
+            label: const Text('Message @hai — AI Assistant'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.accent,
               foregroundColor: Theme.of(context).colorScheme.onPrimary,

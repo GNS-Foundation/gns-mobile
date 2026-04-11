@@ -167,7 +167,7 @@ class _DixComposeScreenState extends State<DixComposeScreen> {
         HapticFeedback.heavyImpact();
         
         if (mounted) {
-          Navigator.pop(context);
+          Navigator.pop(context, true);
         }
       } else {
         final error = responseMap['error'] ?? 'Failed to create post';

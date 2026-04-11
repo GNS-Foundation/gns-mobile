@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../core/auth/browser_pairing_service.dart';
 import '../../core/gns/identity_wallet.dart';
+import '../../core/comm/message_storage.dart';
 
 /// Browser Pairing Screen with QR Scanner
 class BrowserPairingScreen extends StatefulWidget {
@@ -35,7 +36,7 @@ class _BrowserPairingScreenState extends State<BrowserPairingScreen> {
   @override
   void initState() {
     super.initState();
-    _pairingService = BrowserPairingService(wallet: widget.wallet);
+    _pairingService = BrowserPairingService(wallet: widget.wallet, storage: MessageStorage());
     _scannerController = MobileScannerController(
       detectionSpeed: DetectionSpeed.normal,
       facing: CameraFacing.back,
@@ -656,7 +657,7 @@ class _ActiveSessionsScreenState extends State<ActiveSessionsScreen> {
   @override
   void initState() {
     super.initState();
-    _pairingService = BrowserPairingService(wallet: widget.wallet);
+    _pairingService = BrowserPairingService(wallet: widget.wallet, storage: MessageStorage());
     _loadSessions();
   }
 

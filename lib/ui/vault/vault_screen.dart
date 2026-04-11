@@ -190,7 +190,7 @@ class _VaultScreenState extends State<VaultScreen> {
 
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-      itemCount: keys.fold(0, (sum, k) => sum + 1 + grouped[k]!.length),
+      itemCount: keys.fold<int>(0, (sum, k) => sum + 1 + grouped[k]!.length),
       itemBuilder: (context, index) {
         int i = 0;
         for (final key in keys) {

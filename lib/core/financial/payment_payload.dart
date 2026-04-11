@@ -7,6 +7,8 @@
 //   [MEDIUM] Factory constructor GeoAuthPayload.create() enforces CBT
 // ===========================================
 
+import 'package:flutter/foundation.dart';
+
 // ===========================================
 // BASE PAYLOAD
 // ===========================================
@@ -14,6 +16,69 @@
 abstract class GnsPayload {
   String get type;
   Map<String, dynamic> toJson();
+}
+
+// ===========================================
+// PAYMENT ROUTE
+// ===========================================
+
+/// Describes the selected payment rail for a transfer.
+class PaymentRoute {
+  /// Rail type (e.g. 'sepa_iban', 'lightning_lnurl', 'direct').
+  final String type;
+
+  /// ID of the recipient's endpoint, or 'default'.
+  final String endpointId;
+
+  /// Optional chain identifier for on-chain rails (e.g. 'ethereum', 'solana').
+  final String? chain;
+
+  PaymentRoute({
+    required this.type,
+    required this.endpointId,
+    this.chain,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'type': type,
+    'endpoint_id': endpointId,
+    if (chain != null) 'chain': chain,
+  };
+
+  factory PaymentRoute.fromJson(Map<String, dynamic> json) => PaymentRoute(
+    type: json['type'] as String,
+    endpointId: json['endpoint_id'] as String? ?? 'default',
+    chain: json['chain'] as String?,
+  );
+}
+
+// ===========================================
+// PAYMENT CONSTRAINTS
+// ===========================================
+
+/// Optional constraints/metadata attached to a transfer payload.
+class PaymentConstraints {
+  /// Latest timestamp (ms) by which the payment must be processed.
+  final int? expiresAt;
+
+  /// Max acceptable fee (in payment currency).
+  final double? maxFee;
+
+  PaymentConstraints({this.expiresAt, this.maxFee});
+
+  bool get isExpired =>
+      expiresAt != null && DateTime.now().millisecondsSinceEpoch > expiresAt!;
+
+  Map<String, dynamic> toJson() => {
+    if (expiresAt != null) 'expires_at': expiresAt,
+    if (maxFee != null) 'max_fee': maxFee,
+  };
+
+  factory PaymentConstraints.fromJson(Map<String, dynamic> json) =>
+      PaymentConstraints(
+        expiresAt: json['expires_at'] as int?,
+        maxFee: (json['max_fee'] as num?)?.toDouble(),
+      );
 }
 
 // ===========================================
@@ -35,32 +100,86 @@ class PaymentTransferPayload extends GnsPayload {
   @override
   String get type => PaymentPayloadType.transfer;
 
+  /// Unique payment identifier (UUID).
+  final String? paymentId;
+
+  /// Sender's GNS public key.
+  final String? fromPublicKey;
+
+  /// Recipient's GNS public key.
+  final String? toPublicKey;
+
   final String currency;
-  final double amount;
+
+  /// Amount as a string (preserves precision for fiat; use double for crypto).
+  final String? amountStr;
+
+  /// Amount as a double (used when constructing from numeric values).
+  final double? amountNum;
+
   final String? memo;
-  final String? routeType;
+
+  /// Optional client-side reference (for reconciliation).
+  final String? clientReference;
+
+  /// Selected payment route.
+  final PaymentRoute? route;
+
+  /// Optional constraints.
+  final PaymentConstraints? constraints;
+
+  /// Epoch ms when this payload was created.
+  final int? createdAt;
 
   PaymentTransferPayload({
+    this.paymentId,
+    this.fromPublicKey,
+    this.toPublicKey,
     required this.currency,
-    required this.amount,
+    String? amount,
+    double? amountDouble,
     this.memo,
-    this.routeType,
-  });
+    this.clientReference,
+    this.route,
+    this.constraints,
+    this.createdAt,
+  })  : amountStr = amount,
+        amountNum = amountDouble;
+
+  /// Amount as a string (prefers the string form, falls back to double).
+  String get amount => amountStr ?? amountNum?.toString() ?? '0';
 
   @override
   Map<String, dynamic> toJson() => {
+    'type': type,
+    if (paymentId != null) 'payment_id': paymentId,
+    if (fromPublicKey != null) 'from_public_key': fromPublicKey,
+    if (toPublicKey != null) 'to_public_key': toPublicKey,
     'currency': currency,
     'amount': amount,
     if (memo != null) 'memo': memo,
-    if (routeType != null) 'route_type': routeType,
+    if (clientReference != null) 'client_reference': clientReference,
+    if (route != null) 'route': route!.toJson(),
+    if (constraints != null) 'constraints': constraints!.toJson(),
+    if (createdAt != null) 'created_at': createdAt,
   };
 
   factory PaymentTransferPayload.fromJson(Map<String, dynamic> json) {
     return PaymentTransferPayload(
+      paymentId: json['payment_id'] as String?,
+      fromPublicKey: json['from_public_key'] as String?,
+      toPublicKey: json['to_public_key'] as String?,
       currency: json['currency'] as String,
-      amount: (json['amount'] as num).toDouble(),
+      amount: json['amount']?.toString(),
       memo: json['memo'] as String?,
-      routeType: json['route_type'] as String?,
+      clientReference: json['client_reference'] as String?,
+      route: json['route'] != null
+          ? PaymentRoute.fromJson(json['route'] as Map<String, dynamic>)
+          : null,
+      constraints: json['constraints'] != null
+          ? PaymentConstraints.fromJson(json['constraints'] as Map<String, dynamic>)
+          : null,
+      createdAt: json['created_at'] as int?,
     );
   }
 }

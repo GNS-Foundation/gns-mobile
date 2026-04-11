@@ -82,7 +82,6 @@ class ProfileService {
       lastSeen: lastBreadcrumbAt,
       isOwnIdentity: true,
       isContact: false,
-      chainValid: info.chainValid,
     );
   }
 

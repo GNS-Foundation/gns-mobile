@@ -1,18 +1,20 @@
-/// Identity Card Widget
-/// 
-/// Displays identity information with avatar, handle, stats, and chain status.
-/// 
-/// Location: lib/ui/widgets/identity_card.dart
-
 import 'package:flutter/material.dart';
 import '../../core/profile/identity_view_data.dart';
+import '../../core/gep/gep_address.dart';
 import '../../core/theme/theme_service.dart';
+import 'gep_address_row.dart';
 
 class IdentityCard extends StatelessWidget {
   final IdentityViewData identity;
+  final GepAddress? gepAddress;  // ← NEW: optional GEA
   final VoidCallback? onEdit;
 
-  const IdentityCard({super.key, required this.identity, this.onEdit});
+  const IdentityCard({
+    super.key,
+    required this.identity,
+    this.gepAddress,  // ← NEW
+    this.onEdit,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -37,10 +39,10 @@ class IdentityCard extends StatelessWidget {
                             identity.avatarUrl!,
                             fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) => 
-                                const Center(child: Text('🔐', style: TextStyle(fontSize: 28))),
+                                const Center(child: Text('📍', style: TextStyle(fontSize: 28))),
                           ),
                         )
-                      : const Center(child: Text('🔐', style: TextStyle(fontSize: 28))),
+                      : const Center(child: Text('📍', style: TextStyle(fontSize: 28))),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
@@ -78,6 +80,13 @@ class IdentityCard extends StatelessWidget {
                 style: TextStyle(color: AppTheme.textSecondary(context)),
               ),
             ],
+
+            // ── GEP ADDRESS ── NEW ──
+            if (gepAddress != null) ...[
+              const SizedBox(height: 12),
+              GepAddressRow(gea: gepAddress!),
+            ],
+
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,

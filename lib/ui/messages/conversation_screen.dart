@@ -1,3 +1,15 @@
+/// Conversation Screen - FULLY CUSTOM Chat View with Hashtag Support
+/// 
+/// Features:
+/// - âœ… Custom long-press menu
+/// - âœ… WhatsApp-style reactions (persistent)
+/// - âœ… Reply to messages
+/// - âœ… Star messages
+/// - âœ… Better message bubbles
+/// - âœ… Multi-select mode (like WhatsApp)
+/// - âœ… NEW: Hashtag detection â†’ Post to facets
+/// - âœ… NEW: Create facets on-the-fly
+/// 
 /// Location: lib/ui/messages/conversation_screen.dart
 
 import 'dart:async';
@@ -5,14 +17,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/comm/communication_service.dart';
 import '../../core/comm/message_storage.dart';
-import '../../core/comm/gns_envelope.dart'; 
+import '../../core/comm/payload_types.dart';
+import '../../core/comm/gns_envelope.dart';  // âœ… For GnsThread
 import '../../core/contacts/contact_storage.dart';
 import '../../core/profile/profile_facet.dart';
 import '../../core/profile/facet_storage.dart';
 import '../../core/theme/theme_service.dart';
-import '../../core/calls/call_service.dart';  
-import '../../core/calls/call_screen.dart';          
-import 'compose_area.dart';  
+import '../../core/sync/websocket_sync_service.dart';
+import '../../core/calls/call_service.dart';
+import '../../core/calls/call_screen.dart';
+import 'compose_area.dart';  // ✅ NEW: Import ComposeArea
 
 class ConversationScreen extends StatefulWidget {
   final GnsThread thread;
@@ -35,19 +49,19 @@ class _ConversationScreenState extends State<ConversationScreen> {
   bool _loading = true;
   String? _error;
   
-  // ✅ Reply state
+  // âœ… Reply state
   GnsMessage? _replyingTo;
   
-  // ✅ Starred messages (in-memory for now, could persist to DB)
+  // âœ… Starred messages (in-memory for now, could persist to DB)
   final Set<String> _starredMessageIds = {};
   
-  // ✅ Reactions (messageId -> emoji)
+  // âœ… Reactions (messageId -> emoji)
   final Map<String, String> _messageReactions = {};
   
-  // ✅ Reply texts (messageId -> original text being replied to)
+  // âœ… Reply texts (messageId -> original text being replied to)
   final Map<String, String> _replyTexts = {};
   
-  // ✅ MULTI-SELECT MODE
+  // âœ… MULTI-SELECT MODE
   bool _selectionMode = false;
   final Set<String> _selectedMessageIds = {};
   
@@ -55,9 +69,17 @@ class _ConversationScreenState extends State<ConversationScreen> {
   final Map<String, bool> _typingUsers = {};
   Timer? _typingTimer;
   Timer? _autoRefreshTimer;
+
+  // ✅ Scroll-to-bottom FAB
+  bool _showScrollFab = false;
+  int _unreadBelow = 0;
+
+  // ✅ Swipe-to-reply drag state (per message id)
+  final Map<String, double> _swipeDx = {};
   
   StreamSubscription? _messageSubscription;
   StreamSubscription? _typingSubscription;
+  StreamSubscription? _wsEventSubscription;  // âœ… NEW: Listen to WebSocket events
   
   String? _myPublicKey;
   String? _otherPublicKey;
@@ -73,6 +95,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void dispose() {
     _messageSubscription?.cancel();
     _typingSubscription?.cancel();
+    _wsEventSubscription?.cancel();  // âœ… NEW: Cancel WebSocket subscription
     _typingTimer?.cancel();
     _autoRefreshTimer?.cancel();
     _scrollController.dispose();
@@ -114,6 +137,16 @@ class _ConversationScreenState extends State<ConversationScreen> {
       }
     });
     
+    // ✅ Listen to WebSocket events for real-time updates
+    final wsService = WebSocketSyncService();
+    _wsEventSubscription = wsService.events.listen((event) {
+      if (event is MessageReceivedEvent) {
+        if (event.conversationWith.toLowerCase() == _otherPublicKey?.toLowerCase()) {
+          _loadMessages();
+        }
+      }
+    });
+    
     await _loadMessages();
     
     final unreadMessages = _messages.where((m) => !m.isOutgoing).map((m) => m.id).toList();
@@ -124,19 +157,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
         toPublicKey: _otherPublicKey!,
       );
     }
-    
-    // ❌ DISABLED: 3-second polling causes infinite sync loop!
-    // WebSocket notifications handle real-time updates.
-    // _autoRefreshTimer = Timer.periodic(
-    //   const Duration(seconds: 3),
-    //   (_) async {
-    //     if (mounted) {
-    //       await widget.commService.syncMessages();
-    //       await _loadMessages();
-    //     }
-    //   },
-    // );
-  }
+
+    // ✅ Scroll FAB: show when user scrolls up from bottom
+    _scrollController.addListener(() {
+      final pos = _scrollController.position;
+      final atBottom = pos.pixels >= pos.maxScrollExtent - 120;
+      if (mounted) setState(() => _showScrollFab = !atBottom);
+    });
+  }  // end _initialize
 
   Future<void> _loadMessages() async {
     try {
@@ -228,7 +256,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
           if (!_selectionMode && _typingUsers.values.any((t) => t))
             _buildTypingIndicator(),
           
-          // ✅ Selection action bar OR ComposeArea (NEW!)
+          // âœ… Selection action bar OR ComposeArea (NEW!)
           if (_selectionMode)
             _buildSelectionActionBar()
           else
@@ -236,10 +264,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
               // Normal message sending
               onSendText: _sendMessageText,
               
-              // ✅ NEW: Post to facet when hashtag detected
+              // âœ… NEW: Post to facet when hashtag detected
               onPostToFacet: _postToFacet,
               
-              // ✅ NEW: Create facet when unknown hashtag
+              // âœ… NEW: Create facet when unknown hashtag
               onCreateFacet: _createFacet,
               
               // Typing indicator
@@ -271,7 +299,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   // ==================== NEW: HASHTAG CALLBACKS ====================
 
-  /// ✅ NEW: Send normal message (called by ComposeArea)
+  /// âœ… NEW: Send normal message (called by ComposeArea)
   Future<void> _sendMessageText(String text) async {
     if (text.isEmpty || _otherPublicKey == null) return;
 
@@ -315,7 +343,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
-  /// ✅ NEW: Post content to a facet (hashtag detected)
+  /// âœ… NEW: Post content to a facet (hashtag detected)
   Future<void> _postToFacet(String text, ProfileFacet facet) async {
     // Show confirmation dialog
     final confirmed = await showDialog<bool>(
@@ -421,7 +449,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     // await widget.commService.broadcastFacetPost(post);
   }
 
-  /// ✅ NEW: Create a new facet from hashtag
+  /// âœ… NEW: Create a new facet from hashtag
   Future<ProfileFacet?> _createFacet(String suggestedName) async {
     final facetStorage = FacetStorage();
     
@@ -446,7 +474,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     return result;
   }
 
-  /// ✅ NEW: Typing indicator callback
+  /// âœ… NEW: Typing indicator callback
   void _onTypingChanged(bool isTyping) {
     // Note: Typing indicator sending can be implemented when 
     // CommunicationService.sendTypingIndicator is available
@@ -631,7 +659,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
       } else {
         _starredMessageIds.addAll(_selectedMessageIds);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${_selectedMessageIds.length} message${_selectedMessageIds.length > 1 ? 's' : ''} starred ⭐')),
+          SnackBar(content: Text('${_selectedMessageIds.length} message${_selectedMessageIds.length > 1 ? 's' : ''} starred â­')),
         );
       }
     });
@@ -716,13 +744,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
         ],
       ),
       actions: [
-        // 📞 Voice call
         IconButton(
           icon: const Icon(Icons.call, size: 22),
           tooltip: 'Voice call',
           onPressed: () => _startCall('voice'),
         ),
-        // 📹 Video call
         IconButton(
           icon: const Icon(Icons.videocam, size: 22),
           tooltip: 'Video call',
@@ -786,7 +812,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Say hello! 👋',
+              'Say hello! ðŸ‘‹',
               style: TextStyle(color: AppTheme.textMuted(context)),
             ),
           ],
@@ -794,39 +820,181 @@ class _ConversationScreenState extends State<ConversationScreen> {
       );
     }
 
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-      itemCount: _messages.length,
-      itemBuilder: (context, index) {
-        final message = _messages[index];
-        final isMe = message.isOutgoing;
-        
-        bool showDateHeader = false;
-        if (index == 0) {
-          showDateHeader = true;
-        } else {
-          final prevMessage = _messages[index - 1];
-          final prevDate = DateTime(
-            prevMessage.timestamp.year,
-            prevMessage.timestamp.month,
-            prevMessage.timestamp.day,
-          );
-          final currDate = DateTime(
-            message.timestamp.year,
-            message.timestamp.month,
-            message.timestamp.day,
-          );
-          showDateHeader = prevDate != currDate;
-        }
-        
-        return Column(
-          children: [
-            if (showDateHeader) _buildDateHeader(message.timestamp),
-            _buildMessageBubble(message, isMe),
-          ],
-        );
-      },
+    return Stack(
+      children: [
+        ListView.builder(
+          controller: _scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+          itemCount: _messages.length,
+          itemBuilder: (context, index) {
+            final message = _messages[index];
+            final isMe = message.isOutgoing;
+
+            // ── Date separator ─────────────────────────────────────────
+            bool showDateHeader = false;
+            if (index == 0) {
+              showDateHeader = true;
+            } else {
+              final prev = _messages[index - 1];
+              showDateHeader = !_sameDay(prev.timestamp, message.timestamp);
+            }
+
+            // ── Bubble clustering ─────────────────────────────────────
+            final prevSameGroup = index > 0 &&
+                _messages[index - 1].isOutgoing == isMe &&
+                _sameDay(_messages[index - 1].timestamp, message.timestamp) &&
+                message.timestamp
+                        .difference(_messages[index - 1].timestamp)
+                        .inMinutes <
+                    2;
+            final nextSameGroup = index < _messages.length - 1 &&
+                _messages[index + 1].isOutgoing == isMe &&
+                _sameDay(_messages[index + 1].timestamp, message.timestamp) &&
+                _messages[index + 1]
+                        .timestamp
+                        .difference(message.timestamp)
+                        .inMinutes <
+                    2;
+
+            final isFirstInGroup = !prevSameGroup;
+            final isLastInGroup = !nextSameGroup;
+
+            return Column(
+              children: [
+                if (showDateHeader) _buildDateHeader(message.timestamp),
+                _buildSwipeToReply(
+                  message: message,
+                  child: _buildMessageBubble(
+                    message,
+                    isMe,
+                    isFirstInGroup: isFirstInGroup,
+                    isLastInGroup: isLastInGroup,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+
+        // ── Scroll-to-bottom FAB ──────────────────────────────────────
+        if (_showScrollFab)
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: GestureDetector(
+              onTap: _scrollToBottom,
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppTheme.surface(context),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.18),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                  border: Border.all(
+                    color: AppTheme.border(context),
+                    width: 1,
+                  ),
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    const Icon(Icons.keyboard_arrow_down_rounded, size: 24),
+                    if (_unreadBelow > 0)
+                      Positioned(
+                        top: 2,
+                        right: 2,
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: const BoxDecoration(
+                            color: AppTheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              _unreadBelow > 9 ? '9+' : '$_unreadBelow',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  // ── Swipe-to-reply wrapper ─────────────────────────────────────────────────
+  Widget _buildSwipeToReply({
+    required GnsMessage message,
+    required Widget child,
+  }) {
+    const maxDrag = 72.0;
+    const triggerDx = 60.0;
+
+    return GestureDetector(
+      onHorizontalDragUpdate: _selectionMode
+          ? null
+          : (details) {
+              final dx = (_swipeDx[message.id] ?? 0.0) + details.delta.dx;
+              // Only allow rightward drag (incoming) or leftward (outgoing)
+              final clamped = message.isOutgoing
+                  ? dx.clamp(-maxDrag, 0.0)
+                  : dx.clamp(0.0, maxDrag);
+              setState(() => _swipeDx[message.id] = clamped);
+            },
+      onHorizontalDragEnd: _selectionMode
+          ? null
+          : (details) {
+              final dx = (_swipeDx[message.id] ?? 0.0).abs();
+              if (dx >= triggerDx) {
+                HapticFeedback.mediumImpact();
+                setState(() => _replyingTo = message);
+              }
+              setState(() => _swipeDx[message.id] = 0.0);
+            },
+      child: Stack(
+        alignment: message.isOutgoing
+            ? Alignment.centerRight
+            : Alignment.centerLeft,
+        children: [
+          // Reply icon revealed behind bubble
+          AnimatedOpacity(
+            opacity:
+                ((_swipeDx[message.id] ?? 0.0).abs() / triggerDx).clamp(0.0, 1.0),
+            duration: const Duration(milliseconds: 80),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Icon(
+                Icons.reply_rounded,
+                color: AppTheme.primary,
+                size: 22,
+              ),
+            ),
+          ),
+          // Bubble slides with drag
+          Transform.translate(
+            offset: Offset(_swipeDx[message.id] ?? 0.0, 0),
+            child: child,
+          ),
+        ],
+      ),
     );
   }
 
@@ -861,7 +1029,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  Widget _buildMessageBubble(GnsMessage message, bool isMe) {
+  Widget _buildMessageBubble(
+    GnsMessage message,
+    bool isMe, {
+    bool isFirstInGroup = true,
+    bool isLastInGroup = true,
+  }) {
     final isStarred = _starredMessageIds.contains(message.id);
     final reaction = _messageReactions[message.id];
     final isSelected = _selectedMessageIds.contains(message.id);
@@ -878,7 +1051,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
         color: isSelected 
             ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
             : Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 2),
+        padding: EdgeInsets.symmetric(
+          vertical: isFirstInGroup ? 4 : 1, // tighter spacing in group
+        ),
         child: Row(
           children: [
             if (_selectionMode) ...[
@@ -922,18 +1097,21 @@ class _ConversationScreenState extends State<ConversationScreen> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       if (!isMe) ...[
-                        CircleAvatar(
-                          radius: 16,
-                          backgroundColor: const Color(0xFF64B5F6).withOpacity(0.3),
-                          child: Text(
-                            (_otherHandle ?? '?')[0].toUpperCase(),
-                            style: const TextStyle(
-                              color: Color(0xFF1976D2),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
+                        if (isLastInGroup)
+                          CircleAvatar(
+                            radius: 16,
+                            backgroundColor: const Color(0xFF64B5F6).withOpacity(0.3),
+                            child: Text(
+                              (_otherHandle ?? '?')[0].toUpperCase(),
+                              style: const TextStyle(
+                                color: Color(0xFF1976D2),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
                             ),
-                          ),
-                        ),
+                          )
+                        else
+                          const SizedBox(width: 32),
                         const SizedBox(width: 8),
                       ],
                       
@@ -948,10 +1126,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
                                     ? Theme.of(context).colorScheme.primary
                                     : _getReceivedBubbleColor(),
                                 borderRadius: BorderRadius.only(
-                                  topLeft: const Radius.circular(18),
-                                  topRight: const Radius.circular(18),
-                                  bottomLeft: Radius.circular(isMe ? 18 : 4),
-                                  bottomRight: Radius.circular(isMe ? 4 : 18),
+                                  topLeft: Radius.circular(
+                                    isMe ? 18 : (isFirstInGroup ? 18 : 4)),
+                                  topRight: Radius.circular(
+                                    isMe ? (isFirstInGroup ? 18 : 4) : 18),
+                                  bottomLeft: Radius.circular(
+                                    isMe ? 18 : (isLastInGroup ? 18 : 4)),
+                                  bottomRight: Radius.circular(
+                                    isMe ? (isLastInGroup ? 4 : 4) : 18),
                                 ),
                                 boxShadow: [
                                   BoxShadow(
@@ -1040,6 +1222,44 @@ class _ConversationScreenState extends State<ConversationScreen> {
                                       ],
                                     ],
                                   ),
+                                  // Hive proof footer (Phase 1 polished)
+                                  if (!isMe && message.payload is TextPayload && (message.payload as TextPayload).proof != null)
+                                    Builder(builder: (_) {
+                                      final proof = (message.payload as TextPayload).proof!;
+                                      final isHive = proof.worker != 'groq-backbone';
+                                      final cityName = proof.cell.startsWith('871e9a') || proof.cell.startsWith('8a1e8') ? 'Rome'
+                                          : proof.cell.startsWith('871e8') ? 'Italy'
+                                          : proof.cell.substring(0, 8);
+                                      final proofColor = isHive ? const Color(0xFFFFAB00) : const Color(0xFF6E7681);
+                                      return GestureDetector(
+                                        onTap: () => _showProofReceipt(context, proof, isHive, cityName),
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(top: 4, left: 4),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                isHive ? Icons.hexagon_outlined : Icons.cloud_outlined,
+                                                size: 12,
+                                                color: proofColor,
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                isHive
+                                                    ? '$cityName · E${proof.epoch} · ${proof.model} · Proof ↗'
+                                                    : '$cityName · Groq · Proof ↗',
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: proofColor.withOpacity(0.85),
+                                                  fontWeight: FontWeight.w500,
+                                                  letterSpacing: -0.2,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    }),
                                 ],
                               ),
                             ),
@@ -1220,12 +1440,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    _buildReactionButton('👍', message),
-                    _buildReactionButton('❤️', message),
-                    _buildReactionButton('😂', message),
-                    _buildReactionButton('😮', message),
-                    _buildReactionButton('😢', message),
-                    _buildReactionButton('🙏', message),
+                    _buildReactionButton('ðŸ‘', message),
+                    _buildReactionButton('â¤ï¸', message),
+                    _buildReactionButton('ðŸ˜‚', message),
+                    _buildReactionButton('ðŸ˜®', message),
+                    _buildReactionButton('ðŸ˜¢', message),
+                    _buildReactionButton('ðŸ™', message),
                     Container(
                       width: 40,
                       height: 40,
@@ -1364,7 +1584,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
       } else {
         _starredMessageIds.add(message.id);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Message starred ⭐')),
+          const SnackBar(content: Text('Message starred â­')),
         );
       }
     });
@@ -1485,13 +1705,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   void _showFullEmojiPicker(GnsMessage message) {
     final emojis = [
-      '👍', '👎', '❤️', '🧡', '💛', '💚', '💙', '💜',
-      '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂',
-      '🙂', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗',
-      '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝',
-      '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑',
-      '😶', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔',
-      '🙏', '👏', '🎉', '🔥', '✨', '💯', '✅', '❌',
+      'ðŸ‘', 'ðŸ‘Ž', 'â¤ï¸', 'ðŸ§¡', 'ðŸ’›', 'ðŸ’š', 'ðŸ’™', 'ðŸ’œ',
+      'ðŸ˜€', 'ðŸ˜ƒ', 'ðŸ˜„', 'ðŸ˜', 'ðŸ˜†', 'ðŸ˜…', 'ðŸ¤£', 'ðŸ˜‚',
+      'ðŸ™‚', 'ðŸ˜Š', 'ðŸ˜‡', 'ðŸ¥°', 'ðŸ˜', 'ðŸ¤©', 'ðŸ˜˜', 'ðŸ˜—',
+      'ðŸ˜š', 'ðŸ˜™', 'ðŸ¥²', 'ðŸ˜‹', 'ðŸ˜›', 'ðŸ˜œ', 'ðŸ¤ª', 'ðŸ˜',
+      'ðŸ¤—', 'ðŸ¤­', 'ðŸ¤«', 'ðŸ¤”', 'ðŸ¤', 'ðŸ¤¨', 'ðŸ˜', 'ðŸ˜‘',
+      'ðŸ˜¶', 'ðŸ˜', 'ðŸ˜’', 'ðŸ™„', 'ðŸ˜¬', 'ðŸ¤¥', 'ðŸ˜Œ', 'ðŸ˜”',
+      'ðŸ™', 'ðŸ‘', 'ðŸŽ‰', 'ðŸ”¥', 'âœ¨', 'ðŸ’¯', 'âœ…', 'âŒ',
     ];
     
     showModalBottomSheet(
@@ -1562,7 +1782,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
             _infoRow('ID', '${message.id.substring(0, 12)}...'),
             if (_starredMessageIds.contains(message.id)) ...[
               const SizedBox(height: 8),
-              _infoRow('Starred', '⭐ Yes'),
+              _infoRow('Starred', 'â­ Yes'),
             ],
           ],
         ),
@@ -1715,12 +1935,114 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
     final type = callType == 'video' ? CallType.video : CallType.voice;
 
-    // Open the CallScreen — it triggers CallService.startCall() internally
     CallScreen.show(
       context,
       remotePublicKey: _otherPublicKey!,
       remoteHandle: _otherHandle,
       callType: type,
+    );
+  }
+
+  void _showProofReceipt(BuildContext context, dynamic proof, bool isHive, String cityName) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surface(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36, height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Icon(
+                    isHive ? Icons.hexagon_outlined : Icons.cloud_outlined,
+                    color: isHive ? const Color(0xFFFFAB00) : const Color(0xFF6E7681),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Compute Receipt',
+                    style: TextStyle(
+                      color: AppTheme.textPrimary(context),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _proofRow(context, 'Worker', isHive ? (proof.worker ?? 'unknown') : 'Groq backbone'),
+              _proofRow(context, 'Provider', isHive ? 'GEIANT Hive' : 'Groq (backbone)'),
+              _proofRow(context, 'Model', proof.model ?? ''),
+              _proofRow(context, 'Cell', proof.cell ?? ''),
+              _proofRow(context, 'Epoch', '${proof.epoch}'),
+              Divider(color: Colors.white.withOpacity(0.1), height: 24),
+              if (proof.tokensIn != null)
+                _proofRow(context, 'Tokens', '${proof.tokensIn} in → ${proof.tokensOut} out'),
+              if (proof.latencyMs != null)
+                _proofRow(context, 'Latency', '${proof.latencyMs}ms'),
+              if (proof.costGns != null && isHive)
+                _proofRow(context, 'Cost', '${proof.costGns} GNS'),
+              if (proof.jobHash != null)
+                _proofRow(context, 'Job hash', proof.jobHash),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: (isHive ? const Color(0xFFFFAB00) : const Color(0xFF3B82F6)).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: (isHive ? const Color(0xFFFFAB00) : const Color(0xFF3B82F6)).withOpacity(0.25),
+                  ),
+                ),
+                child: Text(
+                  isHive
+                      ? '✓ Computed on Hive · MobyDB proof pending'
+                      : '☁ Groq backbone · No on-chain proof',
+                  style: TextStyle(
+                    color: isHive ? const Color(0xFFFFAB00) : const Color(0xFF6E7681),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _proofRow(BuildContext context, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(label, style: TextStyle(color: AppTheme.textSecondary(context), fontSize: 12)),
+          ),
+          Expanded(
+            child: Text(value, style: TextStyle(color: AppTheme.textPrimary(context), fontSize: 12)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1828,13 +2150,13 @@ class _CreateFacetDialog extends StatefulWidget {
 
 class _CreateFacetDialogState extends State<_CreateFacetDialog> {
   late TextEditingController _nameController;
-  String _selectedEmoji = '📌';
+  String _selectedEmoji = 'ðŸ“Œ';
   bool _saving = false;
   
   static const _emojis = [
-    '📌', '🎵', '💼', '🎉', '👨‍👩‍👧', '✈️', '🎮', '⚽', 
-    '🍕', '💻', '🎨', '📷', '💪', '₿', '📊', '✨',
-    '🎬', '📚', '🎸', '🏠', '🚗', '🌍', '☕', '🍺',
+    'ðŸ“Œ', 'ðŸŽµ', 'ðŸ’¼', 'ðŸŽ‰', 'ðŸ‘¨â€ðŸ‘©â€ðŸ‘§', 'âœˆï¸', 'ðŸŽ®', 'âš½', 
+    'ðŸ•', 'ðŸ’»', 'ðŸŽ¨', 'ðŸ“·', 'ðŸ’ª', 'â‚¿', 'ðŸ“Š', 'âœ¨',
+    'ðŸŽ¬', 'ðŸ“š', 'ðŸŽ¸', 'ðŸ ', 'ðŸš—', 'ðŸŒ', 'â˜•', 'ðŸº',
   ];
   
   @override
@@ -1852,20 +2174,20 @@ class _CreateFacetDialogState extends State<_CreateFacetDialog> {
   
   String _suggestEmoji(String name) {
     const suggestions = {
-      'music': '🎵', 'dix': '🎵',
-      'work': '💼', 'business': '💼',
-      'friends': '🎉', 'party': '🎉',
-      'family': '👨‍👩‍👧',
-      'travel': '✈️', 'trip': '✈️',
-      'gaming': '🎮', 'games': '🎮',
-      'sports': '⚽', 'fitness': '💪',
-      'food': '🍕', 'cooking': '🍕',
-      'tech': '💻', 'code': '💻',
-      'art': '🎨', 'creative': '🎨',
-      'photo': '📷', 'photography': '📷',
-      'crypto': '₿', 'finance': '📊',
+      'music': 'ðŸŽµ', 'dix': 'ðŸŽµ',
+      'work': 'ðŸ’¼', 'business': 'ðŸ’¼',
+      'friends': 'ðŸŽ‰', 'party': 'ðŸŽ‰',
+      'family': 'ðŸ‘¨â€ðŸ‘©â€ðŸ‘§',
+      'travel': 'âœˆï¸', 'trip': 'âœˆï¸',
+      'gaming': 'ðŸŽ®', 'games': 'ðŸŽ®',
+      'sports': 'âš½', 'fitness': 'ðŸ’ª',
+      'food': 'ðŸ•', 'cooking': 'ðŸ•',
+      'tech': 'ðŸ’»', 'code': 'ðŸ’»',
+      'art': 'ðŸŽ¨', 'creative': 'ðŸŽ¨',
+      'photo': 'ðŸ“·', 'photography': 'ðŸ“·',
+      'crypto': 'â‚¿', 'finance': 'ðŸ“Š',
     };
-    return suggestions[name.toLowerCase()] ?? '📌';
+    return suggestions[name.toLowerCase()] ?? 'ðŸ“Œ';
   }
   
   Future<void> _save() async {

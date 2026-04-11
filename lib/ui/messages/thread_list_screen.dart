@@ -49,6 +49,9 @@ class _ThreadListScreenState extends State<ThreadListScreen> with SingleTickerPr
   // Email state
   int _emailUnread = 0;
   
+  // Key to force DixTimelineScreen rebuild after posting
+  int _dixRefreshKey = 0;
+  
   // User handle (loaded async)
   String? _userHandle;
   
@@ -524,7 +527,7 @@ class _ThreadListScreenState extends State<ThreadListScreen> with SingleTickerPr
   
   Widget _buildGlobalTab() {
     // Use the full DIX Timeline Screen
-    return const DixTimelineScreen();
+    return DixTimelineScreen(key: ValueKey(_dixRefreshKey));
   }
 
   Widget _buildGlobalEmptyState() {
@@ -694,10 +697,8 @@ class _ThreadListScreenState extends State<ThreadListScreen> with SingleTickerPr
         fullscreenDialog: true,
       ),
     ).then((result) {
-      // Refresh if post was created
-      if (result != null) {
-        setState(() {}); // Triggers rebuild of DixTimelineScreen
-      }
+      // Always refresh timeline after returning from compose
+      if (mounted) setState(() => _dixRefreshKey++); // Force DixTimelineScreen rebuild
     });
   }
 

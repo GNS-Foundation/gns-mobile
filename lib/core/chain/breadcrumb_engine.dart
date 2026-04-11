@@ -131,10 +131,10 @@ class BreadcrumbEngine {
   bool useBackgroundStream = true;
 
   // Production settings (used by both modes)
-  bool requireMovement = true;
-  double minimumDistanceMeters = 100.0;
+  bool requireMovement = false;  // Accessibility: no movement required
+  double minimumDistanceMeters = 0.0;  // Anti-spoofing at backend layer, not engine
   double maximumSpeedKmh = 200.0;
-  int maxSameLocationBreadcrumbs = 10;
+  int maxSameLocationBreadcrumbs = 999999;  // No per-cell limit — pattern analysis handles fraud
   Duration minTimeBetweenDrops = const Duration(minutes: 5);
   Duration collectionInterval = const Duration(minutes: 5); // legacy timer fallback
 

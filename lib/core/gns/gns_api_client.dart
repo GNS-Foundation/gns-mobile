@@ -18,6 +18,8 @@ class GnsApiClient {
   late Dio _dio;
   String _nodeUrl = defaultNodeUrl;
   
+  /// Public accessor for direct HTTP calls from services.
+  Dio get dio => _dio;
   String get nodeUrl => _nodeUrl;
   
   void _initDio() {

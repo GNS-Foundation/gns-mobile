@@ -12,6 +12,7 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../core/comm/message_storage.dart';
 import '../../core/profile/profile_facet.dart';
 import '../../core/utils/hashtag_detector.dart';
@@ -64,18 +65,23 @@ class _ComposeAreaState extends State<ComposeArea> with SingleTickerProviderStat
   bool _hasText = false;
   bool _sending = false;
   bool _showAttachments = false;
-  
+  bool _micPressed = false;   // ✅ press-and-hold mic state
+
   // Hashtag detection state - NEW
   HashtagParseResult? _parseResult;
   Timer? _parseDebounce;
-  
+
   // Typing indicator debounce
   Timer? _typingTimer;
   bool _isTyping = false;
-  
+
   // Animation for routing indicator - NEW
   late AnimationController _indicatorAnimController;
   late Animation<double> _indicatorAnimation;
+
+  // ✅ Animation for send ↔ mic button transition
+  late AnimationController _sendMicController;
+  late Animation<double> _sendMicAnimation;
 
   @override
   void initState() {
@@ -91,6 +97,16 @@ class _ComposeAreaState extends State<ComposeArea> with SingleTickerProviderStat
       parent: _indicatorAnimController,
       curve: Curves.easeOut,
     );
+
+    // ✅ Send ↔ mic transition (forward = send icon, reverse = mic icon)
+    _sendMicController = AnimationController(
+      duration: const Duration(milliseconds: 220),
+      vsync: this,
+    );
+    _sendMicAnimation = CurvedAnimation(
+      parent: _sendMicController,
+      curve: Curves.easeInOut,
+    );
   }
 
   @override
@@ -100,14 +116,21 @@ class _ComposeAreaState extends State<ComposeArea> with SingleTickerProviderStat
     _typingTimer?.cancel();
     _parseDebounce?.cancel();
     _indicatorAnimController.dispose();
+    _sendMicController.dispose();
     super.dispose();
   }
 
   void _onTextChanged() {
     final hasText = _controller.text.trim().isNotEmpty;
-    
+
     if (hasText != _hasText) {
       setState(() => _hasText = hasText);
+      // ✅ Animate send ↔ mic
+      if (hasText) {
+        _sendMicController.forward();
+      } else {
+        _sendMicController.reverse();
+      }
     }
 
     // Handle typing indicator
@@ -517,42 +540,93 @@ class _ComposeAreaState extends State<ComposeArea> with SingleTickerProviderStat
   Widget _buildSendButton() {
     final canSend = _hasText && !_sending;
     final isCreateNeeded = _parseResult?.needsNewFacet == true;
-    
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      child: Material(
-        // Color changes based on routing - NEW
-        color: canSend 
-            ? (isCreateNeeded ? Colors.grey : _getRoutingColor())
-            : AppTheme.surfaceLight(context),
-        borderRadius: BorderRadius.circular(24),
-        child: InkWell(
-          // Disable send if create needed - NEW
-          onTap: canSend && !isCreateNeeded ? _send : null,
-          borderRadius: BorderRadius.circular(24),
-          child: Container(
-            width: 48,
-            height: 48,
-            alignment: Alignment.center,
-            child: _sending
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppTheme.textPrimary(context),
-                    ),
+    final routingColor = _getRoutingColor();
+
+    return GestureDetector(
+      // ✅ Press-and-hold mic
+      onLongPressStart: _hasText ? null : (_) {
+        setState(() => _micPressed = true);
+        HapticFeedback.mediumImpact();
+      },
+      onLongPressEnd: _hasText ? null : (_) {
+        setState(() => _micPressed = false);
+      },
+      onTap: canSend && !isCreateNeeded ? _send : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeInOut,
+        width: _micPressed ? 56 : 48,
+        height: _micPressed ? 56 : 48,
+        decoration: BoxDecoration(
+          color: canSend
+              ? (isCreateNeeded ? AppTheme.darkTextMuted : routingColor)
+              : (_micPressed
+                  ? AppTheme.primary
+                  : AppTheme.surfaceLight(context)),
+          shape: BoxShape.circle,
+          boxShadow: canSend || _micPressed
+              ? [
+                  BoxShadow(
+                    color: (canSend ? routingColor : AppTheme.primary)
+                        .withOpacity(0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
                   )
-                : Icon(
-                    // Icon changes for facet post - NEW
-                    _parseResult?.isFacetPost == true ? Icons.publish : Icons.send,
-                    color: canSend && !isCreateNeeded
-                        ? Colors.white 
-                        : AppTheme.textMuted(context),
-                    size: 22,
-                  ),
-          ),
+                ]
+              : null,
         ),
+        child: _sending
+            ? Padding(
+                padding: const EdgeInsets.all(14),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppTheme.textPrimary(context),
+                ),
+              )
+            : AnimatedBuilder(
+                animation: _sendMicAnimation,
+                builder: (_, __) {
+                  // Rotate 0→ -90° and scale 1→0 for mic, then scale 0→1 for send
+                  final t = _sendMicAnimation.value;
+                  return Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // Mic icon (visible when t is low)
+                      Transform.scale(
+                        scale: (1.0 - t).clamp(0.0, 1.0),
+                        child: Transform.rotate(
+                          angle: t * -1.5708, // 0 → -90°
+                          child: Icon(
+                            _micPressed
+                                ? Icons.mic
+                                : Icons.mic_none_rounded,
+                            color: _micPressed
+                                ? Colors.white
+                                : AppTheme.textMuted(context),
+                            size: 22,
+                          ),
+                        ),
+                      ),
+                      // Send icon (visible when t is high)
+                      Transform.scale(
+                        scale: t.clamp(0.0, 1.0),
+                        child: Transform.rotate(
+                          angle: (1.0 - t) * 1.5708, // 90° → 0°
+                          child: Icon(
+                            _parseResult?.isFacetPost == true
+                                ? Icons.publish_rounded
+                                : Icons.send_rounded,
+                            color: canSend && !isCreateNeeded
+                                ? Colors.white
+                                : AppTheme.textMuted(context),
+                            size: 22,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
       ),
     );
   }
@@ -680,24 +754,24 @@ class _EmojiPicker extends StatelessWidget {
 
   static const _emojis = [
     // Smileys
-    '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂',
-    '🙂', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗',
-    '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝',
-    '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑',
-    '😶', '😏', '😒', '🙄', '😬', '😮‍💨', '🤥', '😌',
-    '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢',
+    'ðŸ˜€', 'ðŸ˜ƒ', 'ðŸ˜„', 'ðŸ˜', 'ðŸ˜†', 'ðŸ˜…', 'ðŸ¤£', 'ðŸ˜‚',
+    'ðŸ™‚', 'ðŸ˜Š', 'ðŸ˜‡', 'ðŸ¥°', 'ðŸ˜', 'ðŸ¤©', 'ðŸ˜˜', 'ðŸ˜—',
+    'ðŸ˜š', 'ðŸ˜™', 'ðŸ¥²', 'ðŸ˜‹', 'ðŸ˜›', 'ðŸ˜œ', 'ðŸ¤ª', 'ðŸ˜',
+    'ðŸ¤—', 'ðŸ¤­', 'ðŸ¤«', 'ðŸ¤”', 'ðŸ¤', 'ðŸ¤¨', 'ðŸ˜', 'ðŸ˜‘',
+    'ðŸ˜¶', 'ðŸ˜', 'ðŸ˜’', 'ðŸ™„', 'ðŸ˜¬', 'ðŸ˜®â€ðŸ’¨', 'ðŸ¤¥', 'ðŸ˜Œ',
+    'ðŸ˜”', 'ðŸ˜ª', 'ðŸ¤¤', 'ðŸ˜´', 'ðŸ˜·', 'ðŸ¤’', 'ðŸ¤•', 'ðŸ¤¢',
     // Gestures
-    '👍', '👎', '👊', '✊', '🤛', '🤜', '🤝', '👏',
-    '🙌', '👐', '🤲', '🤗', '🙏', '✌️', '🤞', '🤟',
-    '🤘', '🤙', '👈', '👉', '👆', '👇', '☝️', '✋',
-    '🤚', '🖐️', '🖖', '👋', '🤏', '✍️', '💪', '🦾',
+    'ðŸ‘', 'ðŸ‘Ž', 'ðŸ‘Š', 'âœŠ', 'ðŸ¤›', 'ðŸ¤œ', 'ðŸ¤', 'ðŸ‘',
+    'ðŸ™Œ', 'ðŸ‘', 'ðŸ¤²', 'ðŸ¤—', 'ðŸ™', 'âœŒï¸', 'ðŸ¤ž', 'ðŸ¤Ÿ',
+    'ðŸ¤˜', 'ðŸ¤™', 'ðŸ‘ˆ', 'ðŸ‘‰', 'ðŸ‘†', 'ðŸ‘‡', 'â˜ï¸', 'âœ‹',
+    'ðŸ¤š', 'ðŸ–ï¸', 'ðŸ––', 'ðŸ‘‹', 'ðŸ¤', 'âœï¸', 'ðŸ’ª', 'ðŸ¦¾',
     // Hearts
-    '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍',
-    '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖',
-    '💘', '💝', '💟', '♥️', '😻', '💑', '💏', '👩‍❤️‍👨',
+    'â¤ï¸', 'ðŸ§¡', 'ðŸ’›', 'ðŸ’š', 'ðŸ’™', 'ðŸ’œ', 'ðŸ–¤', 'ðŸ¤',
+    'ðŸ¤Ž', 'ðŸ’”', 'â£ï¸', 'ðŸ’•', 'ðŸ’ž', 'ðŸ’“', 'ðŸ’—', 'ðŸ’–',
+    'ðŸ’˜', 'ðŸ’', 'ðŸ’Ÿ', 'â™¥ï¸', 'ðŸ˜»', 'ðŸ’‘', 'ðŸ’', 'ðŸ‘©â€â¤ï¸â€ðŸ‘¨',
     // Objects
-    '🔥', '✨', '⭐', '🌟', '💫', '🎉', '🎊', '🎁',
-    '🎈', '🎀', '🏆', '🥇', '🎯', '💯', '✅', '❌',
+    'ðŸ”¥', 'âœ¨', 'â­', 'ðŸŒŸ', 'ðŸ’«', 'ðŸŽ‰', 'ðŸŽŠ', 'ðŸŽ',
+    'ðŸŽˆ', 'ðŸŽ€', 'ðŸ†', 'ðŸ¥‡', 'ðŸŽ¯', 'ðŸ’¯', 'âœ…', 'âŒ',
   ];
 
   @override

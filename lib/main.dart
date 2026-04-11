@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
 import 'core/gns/identity_wallet.dart';
 import 'core/tier/tier_gate.dart';
+import 'core/notifications/apns_token_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,6 +30,7 @@ void main() async {
   
   // Initialize identity (no messaging/payments at startup)
   await _initializeIdentity();
+  ApnsTokenService().initialize();
   
   runApp(const GlobeCrumbsApp());
 }

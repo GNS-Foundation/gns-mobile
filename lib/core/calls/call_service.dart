@@ -454,6 +454,17 @@ class CallService extends ChangeNotifier {
     // Notify caller we're ringing
     _sendSignal('call_ringing', {'callId': callId});
 
+    // Show native CallKit UI if not already showing via VoIP push
+    final callKit = CallKitService();
+    if (callKit.currentCallId != callId) {
+      await callKit.showIncomingCall(
+        callId: callId,
+        callerPublicKey: fromPk,
+        callerHandle: fromHandle,
+        callType: callTypeStr,
+      );
+    }
+
     // Ring timeout
     _ringTimer = Timer(_ringTimeout, () {
       if (_state == CallState.incomingRinging) {

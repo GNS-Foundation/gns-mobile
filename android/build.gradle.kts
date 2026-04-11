@@ -15,6 +15,12 @@ subprojects {
 
 subprojects {
     project.evaluationDependsOn(":app")
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        compilerOptions {
+            allWarningsAsErrors.set(false)
+            apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
+        }
+    }
 }
 
 tasks.register<Delete>("clean") {

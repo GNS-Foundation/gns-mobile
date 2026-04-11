@@ -111,24 +111,26 @@ class GnsTransaction {
   }) {
     final now = DateTime.now();
     return GnsTransaction(
-      id: payload.paymentId,
-      fromPublicKey: payload.fromPublicKey,
+      id: payload.paymentId ?? '',
+      fromPublicKey: payload.fromPublicKey ?? '',
       fromHandle: fromHandle,
-      toPublicKey: payload.toPublicKey,
+      toPublicKey: payload.toPublicKey ?? '',
       toHandle: toHandle,
       amount: payload.amount,
       currency: payload.currency,
       memo: payload.memo,
-      routeType: payload.route.type,
+      routeType: payload.route?.type ?? 'direct',
       status: TransactionStatus.pending,
       direction: isOutgoing 
           ? TransactionDirection.outgoing 
           : TransactionDirection.incoming,
-      createdAt: DateTime.fromMillisecondsSinceEpoch(payload.createdAt),
+      createdAt: payload.createdAt != null
+          ? DateTime.fromMillisecondsSinceEpoch(payload.createdAt!)
+          : now,
       updatedAt: now,
       envelopeId: envelopeId,
       metadata: {
-        'route_endpoint_id': payload.route.endpointId,
+        'route_endpoint_id': payload.route?.endpointId ?? 'default',
         if (payload.clientReference != null) 'client_reference': payload.clientReference,
       },
     );

@@ -170,9 +170,9 @@ class MessageBubble extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildContent(),
-              _buildProofFooter(),
               const SizedBox(height: 4),
               _buildTimestamp(),
+              _buildProofFooter(),
             ],
           ),
         ),
@@ -210,8 +210,12 @@ class MessageBubble extends StatelessWidget {
   Widget _buildProofFooter() {
     // Only show for incoming messages with proof metadata
     if (message.isOutgoing) return const SizedBox.shrink();
-    if (message.payload is! TextPayload) return const SizedBox.shrink();
+    if (message.payload is! TextPayload) {
+      debugPrint('PROOF: payload is not TextPayload, is: \${message.payload.runtimeType}');
+      return const SizedBox.shrink();
+    }
     final proof = (message.payload as TextPayload).proof;
+    debugPrint('PROOF: proof = \$proof');
     if (proof == null) return const SizedBox.shrink();
     
     final epoch = proof.epoch;

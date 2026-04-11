@@ -7,7 +7,6 @@
 
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/gns/identity_wallet.dart';
@@ -22,9 +21,9 @@ import '../screens/debug_screen.dart';
 import '../financial/financial_settings_screen.dart';
 import '../financial/transactions_screen.dart';
 import '../messages/broadcast_screen.dart';
-import '../screens/org_registration_screen.dart';
-import '../screens/identity_details_screen.dart';
-import '../gsite/gsite_creator.dart';  // ðŸ¢ Organization Registration
+import '../screens/org_registration_screen.dart';  // ðŸ¢ Organization Registration
+import '../hive/hive_worker_screen.dart';  // Hive Worker
+import '../../core/hive/hive_worker_service.dart';  // Hive Worker Service
 
 // ==================== SETTINGS TAB ====================
 
@@ -165,90 +164,23 @@ class _SettingsTabState extends State<SettingsTab> {
             ),
           ),
           const SizedBox(height: 16),
-
-          // gSite Creator
           Card(
+            color: Colors.deepPurple.withValues(alpha: 0.1),
             child: ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.indigo.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(Icons.language, color: Colors.indigo),
-              ),
-              title: const Text('Your gSite'),
-              subtitle: const Text('Build your decentralized web presence'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor: Colors.transparent,
-                  builder: (_) => DraggableScrollableSheet(
-                    initialChildSize: 0.9,
-                    maxChildSize: 0.95,
-                    minChildSize: 0.5,
-                    builder: (_, controller) => ClipRRect(
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                      child: Scaffold(
-                        body: SingleChildScrollView(
-                          controller: controller,
-                          padding: const EdgeInsets.all(24),
-                          child: const GSiteCreatorCard(),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Identity Details
-          Card(
-            child: ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(Icons.key_outlined, color: AppTheme.primary),
-              ),
-              title: const Text('Identity Details'),
-              subtitle: const Text('Your public keys and GNS identity info'),
+              leading: const Icon(Icons.bug_report, color: Colors.deepPurple),
+              title: const Text('Identity Tools'),
+              subtitle: const Text('Cryptographic identity details'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const IdentityDetailsScreen()),
+                  MaterialPageRoute(builder: (context) => const DebugScreen()),
                 );
               },
             ),
           ),
           const SizedBox(height: 16),
 
-          // Developer Tools — debug builds only, invisible in production
-          if (kDebugMode) ...[
-            Card(
-              color: Colors.deepPurple.withOpacity(0.08),
-              child: ListTile(
-                leading: const Icon(Icons.bug_report, color: Colors.deepPurple),
-                title: const Text('Developer Tools'),
-                subtitle: const Text('Debug console — not visible in production'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const DebugScreen()),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
           Card(
             child: ListTile(
               leading: const Icon(Icons.delete_forever, color: AppTheme.error),
@@ -860,11 +792,84 @@ class _SettingsTabState extends State<SettingsTab> {
     );
   }
 
+  // ── Hive Worker entry card ─────────────────────────────────
+
+  Widget _buildHiveWorkerCard() {
+    final service = HiveWorkerService();
+    final status = service.status;
+    final isRunning = status.running;
+    final earnings = status.tokensEarned;
+
+    return Card(
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0099CC), Color(0xFF00C853)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Center(
+            child: Text('⬡', style: TextStyle(fontSize: 22)),
+          ),
+        ),
+        title: const Text(
+          'Hive Worker',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        subtitle: Text(
+          isRunning
+              ? '● Active · ${earnings.toStringAsFixed(4)} GNS earned'
+              : earnings > 0
+                  ? '${earnings.toStringAsFixed(4)} GNS earned — tap to configure'
+                  : 'Earn GNS by contributing to the Hive',
+          style: TextStyle(
+            color: isRunning
+                ? const Color(0xFF00C853)
+                : AppTheme.textMuted(context),
+            fontSize: 12,
+          ),
+        ),
+        trailing: isRunning
+            ? Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00C853).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'LIVE',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF00C853),
+                    letterSpacing: 1,
+                  ),
+                ),
+              )
+            : const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => HiveWorkerScreen(wallet: widget.wallet),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildAboutSection() {
     return Center(
       child: Column(
         children: [
-          Image.asset('assets/icons/gc_splash_logo.png', width: 64, height: 64),
+          const Text('ðŸŒ', style: TextStyle(fontSize: 48)),
           const SizedBox(height: 8),
           const Text(
             'Globe Crumbs',
@@ -876,7 +881,7 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
           const SizedBox(height: 4),
           Text(
-            'v0.5.0 • Meta-Identity Architecture',
+            'v0.5.0 â€¢ Meta-Identity Architecture',
             style: TextStyle(color: AppTheme.textMuted(context), fontSize: 12),
           ),
         ],
