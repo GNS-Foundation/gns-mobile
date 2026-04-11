@@ -13,8 +13,11 @@
 /// Location: lib/ui/messages/conversation_screen.dart
 
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../core/comm/communication_service.dart';
 import '../../core/comm/message_storage.dart';
 import '../../core/comm/payload_types.dart';
@@ -277,10 +280,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
               replyingTo: _replyingTo,
               onCancelReply: () => setState(() => _replyingTo = null),
               
-              // Attachments
-              onAttachmentPressed: _showAttachmentOptions,
-              onCameraPressed: _showAttachmentOptions,
-              onLocationPressed: _showAttachmentOptions,
+              // Attachments — each tile owns its own pipeline now.
+              onPhotoPressed: _pickPhotoFromGallery,
+              onCameraPressed: _pickPhotoFromCamera,
+              onFilePressed: _pickDocument,
+              onLocationPressed: _shareLocation,
               
               // Enable hashtag detection
               enableHashtagDetection: true,
@@ -1821,111 +1825,142 @@ class _ConversationScreenState extends State<ConversationScreen> {
     return '${dt.day}/${dt.month}/${dt.year} ${_formatTime(dt)}';
   }
 
-  void _showAttachmentOptions() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppTheme.surface(context),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _buildAttachmentOption(
-                    icon: Icons.photo,
-                    label: 'Photo',
-                    color: Colors.purple,
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Photo sharing coming soon!')),
-                      );
-                    },
-                  ),
-                  _buildAttachmentOption(
-                    icon: Icons.camera_alt,
-                    label: 'Camera',
-                    color: Colors.pink,
-                    onTap: () => Navigator.pop(ctx),
-                  ),
-                  _buildAttachmentOption(
-                    icon: Icons.insert_drive_file,
-                    label: 'Document',
-                    color: Colors.blue,
-                    onTap: () => Navigator.pop(ctx),
-                  ),
-                  _buildAttachmentOption(
-                    icon: Icons.location_on,
-                    label: 'Location',
-                    color: Colors.green,
-                    onTap: () => Navigator.pop(ctx),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _buildAttachmentOption(
-                    icon: Icons.person,
-                    label: 'Contact',
-                    color: Colors.orange,
-                    onTap: () => Navigator.pop(ctx),
-                  ),
-                  _buildAttachmentOption(
-                    icon: Icons.poll,
-                    label: 'Poll',
-                    color: Colors.teal,
-                    onTap: () => Navigator.pop(ctx),
-                  ),
-                  const SizedBox(width: 60),
-                  const SizedBox(width: 60),
-                ],
-              ),
-            ],
-          ),
+  // ==================== MEDIA PICKERS (Sprint 1 #1) ====================
+  //
+  // These pick a local file and hand it to [_sendPendingMedia], which is
+  // responsible for: client-side compression (images), per-file AES-GCM
+  // encryption, upload to POST /messages/media, and wrapping the result as a
+  // `gns/attachment.*` payload inside the existing GNS envelope.
+  //
+  // The encrypt+upload pipeline is NOT yet built — see the TODO in
+  // [_sendPendingMedia]. Backend endpoint needs to be created first.
+
+  final ImagePicker _imagePicker = ImagePicker();
+
+  Future<void> _pickPhotoFromGallery() async {
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+        maxWidth: 1200,
+      );
+      if (picked == null) return;
+      await _sendPendingMedia(
+        file: File(picked.path),
+        mimeType: 'image/jpeg',
+        kind: _MediaKind.image,
+      );
+    } catch (e) {
+      _showMediaError('Could not pick photo: $e');
+    }
+  }
+
+  Future<void> _pickPhotoFromCamera() async {
+    try {
+      final captured = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 1200,
+      );
+      if (captured == null) return;
+      await _sendPendingMedia(
+        file: File(captured.path),
+        mimeType: 'image/jpeg',
+        kind: _MediaKind.image,
+      );
+    } catch (e) {
+      _showMediaError('Could not capture photo: $e');
+    }
+  }
+
+  Future<void> _pickDocument() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
+        withData: false,
+      );
+      if (result == null || result.files.single.path == null) return;
+      final file = File(result.files.single.path!);
+      await _sendPendingMedia(
+        file: file,
+        mimeType: _mimeForExtension(result.files.single.extension),
+        kind: _MediaKind.document,
+      );
+    } catch (e) {
+      _showMediaError('Could not pick file: $e');
+    }
+  }
+
+  Future<void> _shareLocation() async {
+    // TODO(Sprint 2): wire geolocator → gns/attachment.location payload.
+    _showMediaError('Location sharing coming in Sprint 2');
+  }
+
+  /// Hand a picked file to the encrypted-media send pipeline.
+  ///
+  /// TODO(Sprint 1 #1): implement the rest of the pipeline per CLAUDE.md.
+  ///   1. flutter_image_compress (already gated by image_picker quality/maxWidth
+  ///      for the common case, but re-compress if still > ~500KB)
+  ///   2. Generate per-file AES-256 key + 12-byte IV
+  ///   3. AES-GCM encrypt the blob
+  ///   4. POST /messages/media (endpoint needs to be created on gns-backend)
+  ///      → returns signed URL
+  ///   5. Build payload:
+  ///        payload_type: gns/attachment.image | gns/attachment.document
+  ///        fields: url, mime_type, size_bytes, thumbnail_b64?, encryption_key, iv
+  ///   6. Pass through the existing gns_envelope.dart E2E path — the per-file
+  ///      AES key rides inside the envelope, which is itself X25519/HKDF-wrapped.
+  ///   7. Insert local GnsMessage with MessageStatus.sending, update on ack.
+  Future<void> _sendPendingMedia({
+    required File file,
+    required String mimeType,
+    required _MediaKind kind,
+  }) async {
+    if (!mounted) return;
+    final sizeBytes = await file.length();
+    // Preview-only for now: surface the pick so the wiring is visibly live.
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Picked ${kind == _MediaKind.image ? "photo" : "file"} '
+          '(${_formatBytes(sizeBytes)}) — encrypted upload not yet wired',
         ),
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }
 
-  Widget _buildAttachmentOption({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.2),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: color, size: 26),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            style: TextStyle(
-              color: AppTheme.textSecondary(context),
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
+  void _showMediaError(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
     );
+  }
+
+  String _mimeForExtension(String? ext) {
+    switch (ext?.toLowerCase()) {
+      case 'pdf':
+        return 'application/pdf';
+      case 'doc':
+        return 'application/msword';
+      case 'docx':
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      case 'xls':
+        return 'application/vnd.ms-excel';
+      case 'xlsx':
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      case 'txt':
+        return 'text/plain';
+      default:
+        return 'application/octet-stream';
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '${bytes}B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)}KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
   }
 
   // ==================== CALL ====================
@@ -2284,3 +2319,7 @@ class _CreateFacetDialogState extends State<_CreateFacetDialog> {
     );
   }
 }
+
+/// Kind of media being staged for send. Maps 1:1 to `gns/attachment.*` payload
+/// types once the encrypt+upload pipeline lands.
+enum _MediaKind { image, document }
