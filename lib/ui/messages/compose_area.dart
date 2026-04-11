@@ -32,9 +32,23 @@ class ComposeArea extends StatefulWidget {
   final Function(bool isTyping)? onTypingChanged;
   final GnsMessage? replyingTo;
   final VoidCallback? onCancelReply;
+
+  /// Pick a photo from the gallery.
+  final Future<void> Function()? onPhotoPressed;
+
+  /// Open the camera to capture a new photo.
+  final Future<void> Function()? onCameraPressed;
+
+  /// Pick a document (PDF, DOCX, XLSX, etc.).
+  final Future<void> Function()? onFilePressed;
+
+  /// Share current location.
+  final Future<void> Function()? onLocationPressed;
+
+  /// Deprecated: kept temporarily for any legacy call sites.
+  /// New code should use [onPhotoPressed] / [onFilePressed].
+  @Deprecated('Use onPhotoPressed or onFilePressed instead')
   final VoidCallback? onAttachmentPressed;
-  final VoidCallback? onCameraPressed;
-  final VoidCallback? onLocationPressed;
   
   /// Enable hashtag detection (default: true) - NEW
   final bool enableHashtagDetection;
@@ -47,9 +61,12 @@ class ComposeArea extends StatefulWidget {
     this.onTypingChanged,
     this.replyingTo,
     this.onCancelReply,
-    this.onAttachmentPressed,
+    this.onPhotoPressed,
     this.onCameraPressed,
+    this.onFilePressed,
     this.onLocationPressed,
+    @Deprecated('Use onPhotoPressed or onFilePressed instead')
+    this.onAttachmentPressed,
     this.enableHashtagDetection = true,
   });
 
@@ -645,35 +662,38 @@ class _ComposeAreaState extends State<ComposeArea> with SingleTickerProviderStat
             icon: Icons.photo,
             label: 'Photo',
             color: Colors.purple,
-            onTap: widget.onAttachmentPressed ?? () {},
+            onTap: () => _runAttachmentAction(widget.onPhotoPressed),
           ),
           _AttachmentOption(
             icon: Icons.camera_alt,
             label: 'Camera',
             color: Colors.pink,
-            onTap: widget.onCameraPressed ?? () {},
-          ),
-          _AttachmentOption(
-            icon: Icons.location_on,
-            label: 'Location',
-            color: Colors.green,
-            onTap: widget.onLocationPressed ?? () {},
+            onTap: () => _runAttachmentAction(widget.onCameraPressed),
           ),
           _AttachmentOption(
             icon: Icons.insert_drive_file,
             label: 'File',
             color: Colors.blue,
-            onTap: widget.onAttachmentPressed ?? () {},
+            onTap: () => _runAttachmentAction(widget.onFilePressed),
           ),
           _AttachmentOption(
-            icon: Icons.person,
-            label: 'Contact',
-            color: Colors.orange,
-            onTap: () {},
+            icon: Icons.location_on,
+            label: 'Location',
+            color: Colors.green,
+            onTap: () => _runAttachmentAction(widget.onLocationPressed),
           ),
         ],
       ),
     );
+  }
+
+  /// Close the attachment tray, then invoke the picker. The tray must close
+  /// first so the user isn't staring at it while the native picker animates in.
+  Future<void> _runAttachmentAction(Future<void> Function()? action) async {
+    setState(() => _showAttachments = false);
+    if (action != null) {
+      await action();
+    }
   }
 
   void _showEmojiPicker() {
